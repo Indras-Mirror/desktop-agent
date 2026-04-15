@@ -248,26 +248,66 @@ def search_tasks(query, limit=5):
             print(f"    Purpose: {purpose}")
 
 
-def replay_task(name):
+def replay_task(query):
+    # First try exact match
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, steps_json FROM tasks WHERE name = ?", (name,))
+    c.execute("SELECT id, steps_json FROM tasks WHERE name = ?", (query,))
     row = c.fetchone()
 
     if not row:
         conn.close()
-        search_tasks(name, limit=3)
-        return None
+        # Try semantic search
+        query_emb = get_embedding(query)
+        if query_emb:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT id, name, description, purpose, steps_json FROM tasks")
+            rows = c.fetchall()
+            conn.close()
 
-    task_id, steps_json = row
+            if not rows:
+                print("No tasks found.")
+                return None
+
+            results = []
+            for task_id, name, desc, purpose, steps_json in rows:
+                if not desc:
+                    desc = ""
+                stored_emb = get_embedding(f"{name}. {desc}. {purpose or ''}")
+                if stored_emb:
+                    sim = cosine_similarity(query_emb, stored_emb)
+                    results.append((sim, task_id, name, desc, purpose, steps_json))
+
+            results.sort(reverse=True)
+
+            if results:
+                best = results[0]
+                print(
+                    f"Found task via semantic search: '{best[2]}' ({int(best[0] * 100)}% match)"
+                )
+                task_id, steps_json = best[1], best[5]
+            else:
+                print("No matching tasks found.")
+                return None
+        else:
+            print("Could not embed query.")
+            return None
+    else:
+        task_id, steps_json = row
+
     steps = json.loads(steps_json)
 
-    c.execute(
-        "UPDATE tasks SET use_count = use_count + 1, last_used = CURRENT_TIMESTAMP WHERE id = ?",
-        (task_id,),
-    )
-    conn.commit()
-    conn.close()
+    # Update use count
+    if task_id:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "UPDATE tasks SET use_count = use_count + 1, last_used = CURRENT_TIMESTAMP WHERE id = ?",
+            (task_id,),
+        )
+        conn.commit()
+        conn.close()
 
     return steps
 
@@ -1267,6 +1307,7 @@ OCR TEXT FINDING:
     elif cmd in ["screenshot", "ss"]:
         path = args[0] if args else None
         screenshot(path)
+        record_step("screenshot", args, f"Screenshot: {args[0] if args else 'default'}")
 
     elif cmd == "region":
         if len(args) < 1:
@@ -1276,6 +1317,7 @@ OCR TEXT FINDING:
         x, y, w, h = map(int, coords)
         path = args[1] if len(args) > 1 else None
         region_screenshot(x, y, w, h, path)
+        record_step("region", args, f"Region screenshot: {args[0]}")
 
     elif cmd in ["windows", "win"]:
         for win in list_windows():
