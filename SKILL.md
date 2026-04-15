@@ -499,9 +499,75 @@ desktop-agent screenshot "/tmp/${TOPIC}.png"
 - ✅ Pillow (image processing)
 - ✅ xdotool (keyboard/mouse)
 - ✅ scrot (screenshots)
+- ✅ requests (for embedding API)
 
 ---
 
-**Last Updated:** 2026-03-22
-**Status:** Production Ready v1.0
+## Task Recording & Replay (AI-Curated)
+
+The desktop-agent can record task sequences and replay them with semantic search.
+
+### Recording Flow
+
+1. **Start recording**: `desktop-agent record`
+2. **Execute steps**: Use normal commands (focus, click, type, key, etc.)
+3. **Save task**: `desktop-agent save-task <name> [options]`
+
+The AI using the agent should evaluate the task and only save high-quality successful workflows.
+
+### Save Task Options
+
+```bash
+desktop-agent save-task <name> \
+  --description "What the task does" \
+  --purpose "Why it's useful" \
+  --context "When to use it" \
+  --app-context "Requirements"
+```
+
+Example:
+```bash
+desktop-agent save-task play-spotify-aeternum \
+  --description "Open Spotify and play Aeternum gaming playlist" \
+  --purpose "Background music for gaming/work" \
+  --context "When I need focus music" \
+  --app-context "Spotify must be running"
+```
+
+### List & Search Tasks
+
+```bash
+desktop-agent tasks                          # List all saved tasks
+desktop-agent tasks search "play music"      # Semantic search
+```
+
+### Replay Tasks
+
+```bash
+desktop-agent replay "play-spotify-test"     # Dry-run (show steps)
+desktop-agent replay --run "play music"      # Execute (semantic match)
+```
+
+### Delete Tasks
+
+```bash
+desktop-agent forget <task-name>
+```
+
+### How It Works
+
+- **Storage**: SQLite at `~/.cache/desktop-agent/tasks.db`
+- **Embeddings**: Uses nomic-embed-text via `localhost:9086` for semantic search
+- **Persistence**: Recording state survives CLI restarts (saved to `recording.json`)
+- **AI-Curated**: The AI should evaluate success before saving - only save quality tasks
+
+### Semantic Matching
+
+Query "play music" will find "play-spotify-aeternum" based on embedding similarity. This allows flexible replay without exact task names.
+
+---
+
+**Last Updated:** 2026-04-15
+**Status:** Production Ready v1.1 - Task Caching
 **Location:** `/home/mal/.local/bin/desktop-agent`
+**GitHub:** https://github.com/Indras-Mirror/desktop-agent
