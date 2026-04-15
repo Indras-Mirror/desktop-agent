@@ -38,7 +38,7 @@ import sqlite3
 import threading
 import requests
 from datetime import datetime
-import numpy as np
+import math
 
 CACHE_DIR = Path.home() / ".cache" / "desktop-agent"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -98,9 +98,10 @@ def get_embedding(text):
 
 
 def cosine_similarity(a, b):
-    a = np.array(a)
-    b = np.array(b)
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    return dot / (norm_a * norm_b + 1e-8)
 
 
 def start_recording():
@@ -1269,6 +1270,7 @@ OCR TEXT FINDING:
             print("Usage: focus <window-name>")
             sys.exit(1)
         focus_window(args[0])
+        record_step("focus", args, f"Focus window: {args[0]}")
 
     elif cmd == "click":
         if len(args) < 1:
@@ -1278,11 +1280,13 @@ OCR TEXT FINDING:
         # Check if it's an element ref
         if args[0].startswith("@e"):
             click_element(args[0])
+            record_step("click", args, f"Click element: {args[0]}")
         else:
             if len(args) < 2:
                 print("Usage: click <x> <y> OR click @eN")
                 sys.exit(1)
             click(int(args[0]), int(args[1]))
+            record_step("click", args, f"Click at ({args[0]}, {args[1]})")
 
     elif cmd == "dblclick":
         if len(args) < 2:
@@ -1301,12 +1305,14 @@ OCR TEXT FINDING:
             print("Usage: type <text>")
             sys.exit(1)
         type_text(" ".join(args))
+        record_step("type", args, f"Type: {' '.join(args)[:50]}")
 
     elif cmd == "key":
         if not args:
             print("Usage: key <keyname>")
             sys.exit(1)
         press_key(args[0])
+        record_step("key", args, f"Press key: {args[0]}")
 
     elif cmd == "active":
         active = get_active_window()
