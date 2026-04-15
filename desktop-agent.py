@@ -47,9 +47,26 @@ DB_PATH = CACHE_DIR / "tasks.db"
 EMBED_URL = "http://localhost:9086/v1/embeddings"
 EMBED_MODEL = "nomic"
 
-RECORDING_BUFFER = []
-RECORDING_LOCK = threading.Lock()
-RECORDING_ACTIVE = False
+RECORDING_FILE = CACHE_DIR / "recording.json"
+
+
+def load_recording():
+    if RECORDING_FILE.exists():
+        try:
+            with open(RECORDING_FILE, "r") as f:
+                data = json.load(f)
+                return data.get("active", False), data.get("steps", [])
+        except:
+            pass
+    return False, []
+
+
+def save_recording(active, steps):
+    with open(RECORDING_FILE, "w") as f:
+        json.dump({"active": active, "steps": steps}, f)
+
+
+RECORDING_ACTIVE, RECORDING_BUFFER = load_recording()
 
 
 def init_db():
@@ -106,9 +123,9 @@ def cosine_similarity(a, b):
 
 def start_recording():
     global RECORDING_ACTIVE, RECORDING_BUFFER
-    with RECORDING_LOCK:
-        RECORDING_ACTIVE = True
-        RECORDING_BUFFER = []
+    RECORDING_ACTIVE = True
+    RECORDING_BUFFER = []
+    save_recording(True, [])
     print(
         "Recording started. Use desktop-agent commands normally, then 'save-task' to save."
     )
@@ -116,24 +133,24 @@ def start_recording():
 
 def stop_recording():
     global RECORDING_ACTIVE
-    with RECORDING_LOCK:
-        RECORDING_ACTIVE = False
-    return list(RECORDING_BUFFER)
+    RECORDING_ACTIVE = False
+    steps = list(RECORDING_BUFFER)
+    save_recording(False, [])
+    return steps
 
 
 def record_step(command, args, description=""):
     global RECORDING_BUFFER
     if not RECORDING_ACTIVE:
         return
-    with RECORDING_LOCK:
-        RECORDING_BUFFER.append(
-            {
-                "command": command,
-                "args": args,
-                "description": description,
-                "timestamp": time.time(),
-            }
-        )
+    step = {
+        "command": command,
+        "args": args,
+        "description": description,
+        "timestamp": time.time(),
+    }
+    RECORDING_BUFFER.append(step)
+    save_recording(True, RECORDING_BUFFER)
 
 
 def save_task(name, description="", purpose="", context="", app_context=""):
@@ -236,9 +253,9 @@ def replay_task(name):
     c = conn.cursor()
     c.execute("SELECT id, steps_json FROM tasks WHERE name = ?", (name,))
     row = c.fetchone()
-    conn.close()
 
     if not row:
+        conn.close()
         search_tasks(name, limit=3)
         return None
 
@@ -249,7 +266,6 @@ def replay_task(name):
         "UPDATE tasks SET use_count = use_count + 1, last_used = CURRENT_TIMESTAMP WHERE id = ?",
         (task_id,),
     )
-    conn = sqlite3.connect(DB_PATH)
     conn.commit()
     conn.close()
 
