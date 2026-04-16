@@ -614,13 +614,14 @@ def wait_for_text(text, timeout=10, interval=0.5, silent=False):
     return None
 
 
-def wait_for_window(name, timeout=10, interval=0.5):
-    """Wait for window to appear
+def wait_for_window(name, timeout=10, interval=0.5, auto_focus=True):
+    """Wait for window to appear and optionally focus it
 
     Args:
         name: Window name to search for
         timeout: Maximum seconds to wait
         interval: Seconds between checks
+        auto_focus: Automatically focus window when found (default: True)
 
     Returns:
         Window ID if found, None if timeout
@@ -634,6 +635,13 @@ def wait_for_window(name, timeout=10, interval=0.5):
             window_id = stdout.split()[0]
             elapsed = time.time() - start
             print(f"✓ Window '{name}' found after {elapsed:.1f}s (ID: {window_id})")
+
+            # Auto-focus by default
+            if auto_focus:
+                run_cmd(f"xdotool windowactivate {window_id}")
+                time.sleep(0.3)  # Give WM time to focus
+                print(f"✓ Focused window '{name}'")
+
             return window_id
         time.sleep(interval)
 
@@ -671,6 +679,56 @@ def wait_for_file(pattern, timeout=30, interval=1.0):
 
     print(f"✗ Timeout: File matching '{pattern}' not found after {timeout}s")
     return None
+
+
+def ensure_app(app_name, timeout=10):
+    """Ensure app is running - find and focus, or start if needed
+
+    This is the smart command that handles:
+    - App already running → focus it
+    - App not running → start it and wait
+    - Verification that app is ready
+
+    Args:
+        app_name: Application name (as shown in window title or Activities)
+        timeout: Maximum seconds to wait for app to start
+
+    Returns:
+        (success, window_id, status)
+        status: "already_running", "started", or "failed"
+    """
+    print(f"🔍 Ensuring '{app_name}' is running...")
+
+    # Check if window exists
+    stdout, _, _ = run_cmd(f'xdotool search --onlyvisible --name "{app_name}"')
+    if stdout:
+        window_id = stdout.split()[0]
+        # Focus the window
+        run_cmd(f'xdotool windowactivate {window_id}')
+        time.sleep(0.3)
+        print(f"✓ '{app_name}' already running (focused window {window_id})")
+        return True, window_id, "already_running"
+
+    # App not running, start it
+    print(f"  ⏳ Starting '{app_name}'...")
+
+    # Open Activities and launch app
+    run_cmd(f"xdotool key Super")
+    time.sleep(0.8)
+    run_cmd(f'xdotool type "{app_name}"')
+    time.sleep(0.5)
+    run_cmd(f"xdotool key Return")
+
+    # Wait for window to appear
+    print(f"  ⏳ Waiting for '{app_name}' to open...")
+    window_id = wait_for_window(app_name, timeout=timeout, auto_focus=True)
+
+    if window_id:
+        print(f"✓ '{app_name}' started successfully (window {window_id})")
+        return True, window_id, "started"
+    else:
+        print(f"✗ Failed to start '{app_name}'")
+        return False, None, "failed"
 
 
 def click(target, verify=None, verify_timeout=5):
@@ -1656,8 +1714,9 @@ COMMANDS:
                                   --min-confidence  Min confidence (default: 75)
                                   --max-results     Max results (default: 3)
     wait-for-text "<text>"        Wait for text to appear (timeout: 10s)
-    wait-for-window "<name>"      Wait for window to appear (timeout: 10s)
+    wait-for-window "<name>"      Wait for window to appear and focus (timeout: 10s)
     wait-for-file "<pattern>"     Wait for file to exist (timeout: 30s)
+    ensure-app "<name>"           Ensure app is running (focus or start, timeout: 10s)
     pin @eN                      Pin element for stable refs
     pinned                        List pinned elements
     unpin [id]                   Unpin element(s)
@@ -1909,6 +1968,28 @@ OCR TEXT FINDING:
         pattern = " ".join(args)
         result = wait_for_file(pattern, timeout=timeout)
         sys.exit(0 if result else 1)
+
+    elif cmd == "ensure-app":
+        if not args:
+            print("Usage: ensure-app \"<app-name>\" [--timeout N]")
+            print("  Ensures app is running - focuses if already open, starts if not")
+            print("  --timeout   Maximum seconds to wait (default: 10)")
+            sys.exit(1)
+
+        # Parse timeout
+        timeout = 10
+        if "--timeout" in args:
+            idx = args.index("--timeout")
+            if idx + 1 < len(args):
+                timeout = int(args[idx + 1])
+                args = args[:idx] + args[idx + 2:]
+            else:
+                print("Error: --timeout requires a value")
+                sys.exit(1)
+
+        app_name = " ".join(args)
+        success, window_id, status = ensure_app(app_name, timeout=timeout)
+        sys.exit(0 if success else 1)
 
     elif cmd == "pin":
         if not args:
