@@ -576,9 +576,167 @@ def focus_window(name):
     run_cmd(f'xdotool search --onlyvisible --name "{name}" windowactivate')
 
 
-def click(x, y):
+def click_coords(x, y):
+    """Click at specific coordinates"""
     run_cmd(f"xdotool mousemove {x} {y} click 1")
-    print(f"Clicked at ({x}, {y})")
+    print(f"✓ Clicked at ({x}, {y})")
+    return True
+
+
+def wait_for_text(text, timeout=10, interval=0.5, silent=False):
+    """Wait for text to appear on screen using OCR
+
+    Args:
+        text: Text to wait for
+        timeout: Maximum seconds to wait
+        interval: Seconds between checks
+        silent: Don't print progress messages
+
+    Returns:
+        Match dict if found, None if timeout
+    """
+    if not silent:
+        print(f"⏳ Waiting for text '{text}' (timeout: {timeout}s)...")
+    start = time.time()
+
+    while time.time() - start < timeout:
+        result = find_text_on_screen(text, return_all=False, silent=True)
+        if result:
+            elapsed = time.time() - start
+            if not silent:
+                print(f"✓ Found '{text}' after {elapsed:.1f}s")
+            result['time'] = elapsed
+            return result
+        time.sleep(interval)
+
+    if not silent:
+        print(f"✗ Timeout: '{text}' not found after {timeout}s")
+    return None
+
+
+def wait_for_window(name, timeout=10, interval=0.5):
+    """Wait for window to appear
+
+    Args:
+        name: Window name to search for
+        timeout: Maximum seconds to wait
+        interval: Seconds between checks
+
+    Returns:
+        Window ID if found, None if timeout
+    """
+    print(f"⏳ Waiting for window '{name}' (timeout: {timeout}s)...")
+    start = time.time()
+
+    while time.time() - start < timeout:
+        stdout, _, _ = run_cmd(f'xdotool search --onlyvisible --name "{name}"')
+        if stdout:
+            window_id = stdout.split()[0]
+            elapsed = time.time() - start
+            print(f"✓ Window '{name}' found after {elapsed:.1f}s (ID: {window_id})")
+            return window_id
+        time.sleep(interval)
+
+    print(f"✗ Timeout: Window '{name}' not found after {timeout}s")
+    return None
+
+
+def wait_for_file(pattern, timeout=30, interval=1.0):
+    """Wait for file to appear
+
+    Args:
+        pattern: File path pattern (can use wildcards)
+        timeout: Maximum seconds to wait
+        interval: Seconds between checks
+
+    Returns:
+        File path if found, None if timeout
+    """
+    import os
+    pattern = os.path.expanduser(pattern)
+    print(f"⏳ Waiting for file matching '{pattern}' (timeout: {timeout}s)...")
+    start = time.time()
+
+    while time.time() - start < timeout:
+        stdout, _, _ = run_cmd(f"ls {pattern} 2>/dev/null | head -1")
+        if stdout:
+            # Get file size
+            file_path = stdout.strip()
+            size_output, _, _ = run_cmd(f"ls -lh '{file_path}' | awk '{{print $5}}'")
+            size = size_output.strip() if size_output else "?"
+            elapsed = time.time() - start
+            print(f"✓ Found file after {elapsed:.1f}s: {file_path} ({size})")
+            return file_path
+        time.sleep(interval)
+
+    print(f"✗ Timeout: File matching '{pattern}' not found after {timeout}s")
+    return None
+
+
+def click(target, verify=None, verify_timeout=5):
+    """Smart click - auto-detects target type and clicks
+
+    Args:
+        target: Can be:
+            - Coordinates: "x,y" or x, y (integers)
+            - Element ref: "@eN"
+            - Text to search: "Button text"
+        verify: Optional text to wait for after clicking (verification)
+        verify_timeout: Seconds to wait for verification
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Handle different input types
+    if isinstance(target, (tuple, list)) and len(target) == 2:
+        # (x, y) tuple/list
+        x, y = int(target[0]), int(target[1])
+        click_coords(x, y)
+        success = True
+
+    elif isinstance(target, str) and target.startswith("@e"):
+        # Element reference
+        success = click_element(target)
+
+    elif isinstance(target, str) and "," in target and all(p.strip().isdigit() for p in target.split(",")):
+        # Coordinates as string "x,y"
+        x, y = map(int, target.split(","))
+        click_coords(x, y)
+        success = True
+
+    elif isinstance(target, str):
+        # Text search via OCR
+        result = find_text_on_screen(target, return_all=False, silent=False)
+        if result:
+            x, y = result['x'], result['y']
+            click_coords(x, y)
+            print(f"✓ Clicked text '{target}' at ({x}, {y})")
+            success = True
+        else:
+            print(f"✗ Text '{target}' not found on screen")
+            # Try to suggest alternatives
+            partial = find_text_on_screen(target, return_all=True, silent=True, min_confidence=60)
+            if partial and len(partial) > 0:
+                print(f"  Possible alternatives:")
+                for i, match in enumerate(partial[:3], 1):
+                    print(f"    [{i}] '{match['text']}' at ({match['x']}, {match['y']}) - {match['confidence']}%")
+            success = False
+    else:
+        print(f"✗ Invalid click target: {target}")
+        print(f"   Usage: click <x> <y> | click @eN | click \"text\"")
+        success = False
+
+    # Verification if requested
+    if success and verify:
+        print(f"  ⏳ Verifying: looking for '{verify}'...")
+        result = wait_for_text(verify, timeout=verify_timeout, silent=True)
+        if result:
+            print(f"  ✓ Verified: Found '{verify}' after {result['time']:.1f}s")
+        else:
+            print(f"  ✗ Verification failed: '{verify}' not found after {verify_timeout}s")
+            return False
+
+    return success
 
 
 def click_element(ref, force_confidence_threshold=0.5):
@@ -643,23 +801,23 @@ def click_element(ref, force_confidence_threshold=0.5):
 
 def dblclick(x, y):
     run_cmd(f"xdotool mousemove {x} {y} click 1 click 1")
-    print(f"Double-clicked at ({x}, {y})")
+    print(f"✓ Double-clicked at ({x}, {y})")
 
 
 def move(x, y):
     run_cmd(f"xdotool mousemove {x} {y}")
-    print(f"Moved to ({x}, {y})")
+    print(f"✓ Moved to ({x}, {y})")
 
 
 def type_text(text):
     # Escape special characters for xdotool
     run_cmd(f'xdotool type --delay 50 "{text}"')
-    print(f"Typed: {text}")
+    print(f"✓ Typed: {text}")
 
 
 def press_key(key):
     run_cmd(f"xdotool key {key}")
-    print(f"Pressed: {key}")
+    print(f"✓ Pressed: {key}")
 
 
 def get_active_window():
@@ -701,29 +859,67 @@ def get_screen_size():
     return 1920, 1080
 
 
-def find_text_on_screen(text, case_sensitive=False, return_all=False):
+def deduplicate_by_proximity(matches, threshold=50):
+    """Remove duplicate matches that are close together
+
+    Args:
+        matches: List of match dicts with x, y coordinates
+        threshold: Maximum distance in pixels to consider duplicates
+
+    Returns:
+        Filtered list with duplicates removed
+    """
+    if not matches:
+        return []
+
+    filtered = []
+    for match in matches:
+        is_duplicate = False
+        for existing in filtered:
+            dist = math.sqrt((match['x'] - existing['x'])**2 +
+                           (match['y'] - existing['y'])**2)
+            if dist < threshold:
+                # Keep the one with higher confidence
+                if match['confidence'] > existing['confidence']:
+                    filtered.remove(existing)
+                    break
+                else:
+                    is_duplicate = True
+                    break
+        if not is_duplicate:
+            filtered.append(match)
+
+    return filtered
+
+
+def find_text_on_screen(text, case_sensitive=False, return_all=False, min_confidence=75, max_results=3, silent=False):
     """Find text on screen using OCR and return its location
 
     Args:
         text: Text to search for
         case_sensitive: Whether to match case exactly
-        return_all: If True, return all matches as JSON; if False, return best match
+        return_all: If True, return all matches; if False, return best match
+        min_confidence: Minimum OCR confidence (0-100)
+        max_results: Maximum results to return (default 3)
+        silent: Don't print output (for internal use)
 
     Returns:
-        If return_all=True: List of all matches with positions
-        If return_all=False: Best match (for backwards compatibility)
+        If return_all=True: List of matches
+        If return_all=False: Best match dict or None
     """
     if not OCR_AVAILABLE:
-        print("⚠️  OCR not available. Install with: pip3 install pytesseract")
-        return None if not return_all else []
+        if not silent:
+            print("⚠️  OCR not available. Install with: pip3 install pytesseract")
+        return [] if return_all else None
 
     if not PIL_AVAILABLE:
-        print("⚠️  PIL not available. Install with: pip3 install Pillow")
-        return None if not return_all else []
+        if not silent:
+            print("⚠️  PIL not available. Install with: pip3 install Pillow")
+        return [] if return_all else None
 
     # Take screenshot
     ss_path = SCREENSHOT_DIR / "ocr_search.png"
-    screenshot(ss_path)
+    screenshot(ss_path) if not silent else run_cmd(f"scrot '{ss_path}'")
 
     # Run OCR
     img = Image.open(ss_path)
@@ -749,8 +945,8 @@ def find_text_on_screen(text, case_sensitive=False, return_all=False):
                 )
                 conf = data["conf"][i]
 
-                # Only include confident matches
-                if int(conf) > 30:
+                # Apply confidence filter
+                if int(conf) >= min_confidence:
                     matches.append(
                         {
                             "text": word,
@@ -763,26 +959,36 @@ def find_text_on_screen(text, case_sensitive=False, return_all=False):
                         }
                     )
 
-    if matches:
-        # Sort by confidence
-        matches.sort(key=lambda m: m["confidence"], reverse=True)
-        print(f"Found {len(matches)} match(es) for '{text}':")
-        for i, match in enumerate(matches[:10], 1):
-            print(
-                f"  [{i}] '{match['text']}' at ({match['x']}, {match['y']}) - confidence: {match['confidence']}%"
-            )
+    # Deduplicate nearby matches
+    matches = deduplicate_by_proximity(matches, threshold=50)
 
-        if return_all:
-            # Return ALL matches as JSON for AI reasoning
-            print(f"\n[JSON_OUTPUT_START]")
-            print(json.dumps(matches, indent=2))
-            print(f"[JSON_OUTPUT_END]")
-            return matches
-        else:
-            # Return best match (backwards compatible)
-            return matches[0]
+    # Sort by confidence
+    matches.sort(key=lambda m: m["confidence"], reverse=True)
+
+    # Limit results unless return_all requested
+    if not return_all:
+        matches = matches[:max_results]
+
+    if matches:
+        if not silent:
+            if return_all:
+                # JSON output for all matches
+                print(f"✓ Found {len(matches)} match(es) for '{text}':")
+                print(json.dumps(matches, indent=2))
+            else:
+                # Clean output for top matches
+                print(f"✓ Found '{text}' ({len(matches)} match(es)):")
+                for i, match in enumerate(matches, 1):
+                    print(f"  [{i}] \"{match['text']}\" at ({match['x']}, {match['y']}) - {match['confidence']}% confidence")
+                if len(matches) > 0:
+                    print(f"\nTo click: desktop-agent click \"{text}\"")
+
+        return matches if return_all else matches[0]
     else:
-        print(f"Text '{text}' not found on screen")
+        if not silent:
+            print(f"✗ No matches found for '{text}' (min confidence: {min_confidence}%)")
+            if min_confidence > 60:
+                print(f"   Try: desktop-agent find-text \"{text}\" --min-confidence 60")
         return [] if return_all else None
 
 
@@ -1435,6 +1641,8 @@ COMMANDS:
     focus <name>                   Focus window by name
     click <x> <y>                 Click at coordinates
     click @eN                     Click element by ref (after snapshot -i)
+    click "text"                  Click text via OCR search
+    click <target> --verify "text" Click and verify expected result
     dblclick <x> <y>              Double click
     move <x> <y>                 Move mouse
     type "<text>"                 Type text
@@ -1443,7 +1651,13 @@ COMMANDS:
     mouse                          Get mouse position
     snapshot                       Full UI snapshot
     snapshot -i                   Interactive snapshot with AT-SPI elements
-    find-text [--all] "<text>"    Find text using OCR (--all for JSON with all matches)
+    find-text [options] "<text>"  Find text using OCR
+                                  --all             Return all matches as JSON
+                                  --min-confidence  Min confidence (default: 75)
+                                  --max-results     Max results (default: 3)
+    wait-for-text "<text>"        Wait for text to appear (timeout: 10s)
+    wait-for-window "<name>"      Wait for window to appear (timeout: 10s)
+    wait-for-file "<pattern>"     Wait for file to exist (timeout: 30s)
     pin @eN                      Pin element for stable refs
     pinned                        List pinned elements
     unpin [id]                   Unpin element(s)
@@ -1524,19 +1738,37 @@ OCR TEXT FINDING:
 
     elif cmd == "click":
         if len(args) < 1:
-            print("Usage: click <x> <y> OR click @eN")
+            print("Usage: click <x> <y> | click @eN | click \"text\" [--verify \"expected\"]")
             sys.exit(1)
 
-        # Check if it's an element ref
-        if args[0].startswith("@e"):
-            click_element(args[0])
-            record_step("click", args, f"Click element: {args[0]}")
-        else:
-            if len(args) < 2:
-                print("Usage: click <x> <y> OR click @eN")
+        # Parse optional --verify flag
+        verify = None
+        verify_timeout = 5
+        if "--verify" in args:
+            verify_idx = args.index("--verify")
+            if verify_idx + 1 < len(args):
+                verify = args[verify_idx + 1]
+                args = args[:verify_idx] + args[verify_idx + 2:]
+            else:
+                print("Error: --verify requires a text argument")
                 sys.exit(1)
-            click(int(args[0]), int(args[1]))
-            record_step("click", args, f"Click at ({args[0]}, {args[1]})")
+
+        # Smart click - auto-detect target type
+        if args[0].startswith("@e"):
+            # Element reference
+            target = args[0]
+            success = click(target, verify=verify, verify_timeout=verify_timeout)
+            record_step("click", [target], f"Click element: {target}")
+        elif len(args) >= 2 and args[0].isdigit() and args[1].isdigit():
+            # Coordinates
+            target = (int(args[0]), int(args[1]))
+            success = click(target, verify=verify, verify_timeout=verify_timeout)
+            record_step("click", args[:2], f"Click at ({args[0]}, {args[1]})")
+        else:
+            # Text search
+            target = " ".join(args)
+            success = click(target, verify=verify, verify_timeout=verify_timeout)
+            record_step("click", [target], f"Click text: {target[:50]}")
 
     elif cmd == "dblclick":
         if len(args) < 2:
@@ -1576,18 +1808,107 @@ OCR TEXT FINDING:
         snapshot(interactive=interactive)
 
     elif cmd == "find-text":
+        # Parse flags
         return_all = "--all" in args or "-a" in args
+        min_confidence = 75
+        max_results = 3
+
+        # Parse --min-confidence
+        if "--min-confidence" in args:
+            idx = args.index("--min-confidence")
+            if idx + 1 < len(args):
+                min_confidence = int(args[idx + 1])
+                args = args[:idx] + args[idx + 2:]
+            else:
+                print("Error: --min-confidence requires a value (0-100)")
+                sys.exit(1)
+
+        # Parse --max-results
+        if "--max-results" in args:
+            idx = args.index("--max-results")
+            if idx + 1 < len(args):
+                max_results = int(args[idx + 1])
+                args = args[:idx] + args[idx + 2:]
+            else:
+                print("Error: --max-results requires a value")
+                sys.exit(1)
+
+        # Remove --all flag
         if return_all:
             args = [a for a in args if a not in ("--all", "-a")]
+
         if not args:
-            print("Usage: find-text [--all] <text>")
-            print("  --all    Return all matches as JSON (for AI reasoning)")
+            print("Usage: find-text [--all] [--min-confidence N] [--max-results N] <text>")
+            print("  --all              Return all matches as JSON")
+            print("  --min-confidence   Minimum OCR confidence (default: 75)")
+            print("  --max-results      Max results to show (default: 3)")
             sys.exit(1)
+
         text = " ".join(args)
-        result = find_text_on_screen(text, return_all=return_all)
-        if not return_all and result:
-            print(f"\nBest match: '{result['text']}' at ({result['x']}, {result['y']})")
-            print(f"To click it: desktop-agent click {result['x']} {result['y']}")
+        result = find_text_on_screen(text, return_all=return_all, min_confidence=min_confidence, max_results=max_results)
+
+    elif cmd == "wait-for-text":
+        if not args:
+            print("Usage: wait-for-text \"<text>\" [--timeout N]")
+            print("  --timeout   Maximum seconds to wait (default: 10)")
+            sys.exit(1)
+
+        # Parse timeout
+        timeout = 10
+        if "--timeout" in args:
+            idx = args.index("--timeout")
+            if idx + 1 < len(args):
+                timeout = int(args[idx + 1])
+                args = args[:idx] + args[idx + 2:]
+            else:
+                print("Error: --timeout requires a value")
+                sys.exit(1)
+
+        text = " ".join(args)
+        result = wait_for_text(text, timeout=timeout)
+        sys.exit(0 if result else 1)
+
+    elif cmd == "wait-for-window":
+        if not args:
+            print("Usage: wait-for-window \"<name>\" [--timeout N]")
+            print("  --timeout   Maximum seconds to wait (default: 10)")
+            sys.exit(1)
+
+        # Parse timeout
+        timeout = 10
+        if "--timeout" in args:
+            idx = args.index("--timeout")
+            if idx + 1 < len(args):
+                timeout = int(args[idx + 1])
+                args = args[:idx] + args[idx + 2:]
+            else:
+                print("Error: --timeout requires a value")
+                sys.exit(1)
+
+        name = " ".join(args)
+        result = wait_for_window(name, timeout=timeout)
+        sys.exit(0 if result else 1)
+
+    elif cmd == "wait-for-file":
+        if not args:
+            print("Usage: wait-for-file \"<pattern>\" [--timeout N]")
+            print("  --timeout   Maximum seconds to wait (default: 30)")
+            sys.exit(1)
+
+        # Parse timeout
+        timeout = 30
+        if "--timeout" in args:
+            idx = args.index("--timeout")
+            if idx + 1 < len(args):
+                timeout = int(args[idx + 1])
+                args = args[:idx] + args[idx + 2:]
+            else:
+                print("Error: --timeout requires a value")
+                sys.exit(1)
+
+        pattern = " ".join(args)
+        result = wait_for_file(pattern, timeout=timeout)
+        sys.exit(0 if result else 1)
 
     elif cmd == "pin":
         if not args:
