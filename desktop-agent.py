@@ -731,6 +731,102 @@ def ensure_app(app_name, timeout=10):
         return False, None, "failed"
 
 
+def navigate(url, wait_for=None, timeout=15):
+    """Navigate browser to URL - handles URL bar automatically
+
+    This is the smart navigation command that:
+    - Focuses URL bar (Ctrl+l)
+    - Types the URL
+    - Presses Enter
+    - Optionally waits for page to load
+
+    Args:
+        url: URL to navigate to (can be with or without http://)
+        wait_for: Optional text to wait for after navigation
+        timeout: Timeout for page load verification
+
+    Returns:
+        True if successful, False otherwise
+    """
+    print(f"🌐 Navigating to {url}...")
+
+    # Focus URL bar
+    run_cmd("xdotool key ctrl+l")
+    time.sleep(0.5)
+
+    # Type URL
+    run_cmd(f'xdotool type "{url}"')
+    time.sleep(0.3)
+
+    # Press Enter
+    run_cmd("xdotool key Return")
+    print(f"✓ Navigated to {url}")
+
+    # Wait for page load if requested
+    if wait_for:
+        print(f"  ⏳ Waiting for page to load (looking for '{wait_for}')...")
+        from_wait = wait_for_text(wait_for, timeout=timeout, silent=True)
+        if from_wait:
+            print(f"  ✓ Page loaded (found '{wait_for}' after {from_wait['time']:.1f}s)")
+            return True
+        else:
+            print(f"  ✗ Page load timeout: '{wait_for}' not found after {timeout}s")
+            return False
+
+    # Generic wait for navigation
+    time.sleep(2)
+    return True
+
+
+def web_search(query, verify=True, timeout=10):
+    """Perform web search using Ctrl+K (browser search)
+
+    This handles common search patterns:
+    - Uses Ctrl+K to open search box (works in most browsers)
+    - Types the query
+    - Presses Enter
+    - Optionally verifies results appeared
+
+    Args:
+        query: Search query text
+        verify: Verify search results appeared (default: True)
+        timeout: Timeout for verification
+
+    Returns:
+        True if successful, False otherwise
+    """
+    print(f"🔍 Searching for: {query}")
+
+    # Method 1: Try Ctrl+K (Firefox search)
+    run_cmd("xdotool key ctrl+k")
+    time.sleep(0.8)
+
+    # Type query
+    run_cmd(f'xdotool type "{query}"')
+    time.sleep(0.5)
+    print(f"✓ Typed search query: {query}")
+
+    # Press Enter
+    run_cmd("xdotool key Return")
+    print(f"✓ Submitted search")
+
+    # Verify results if requested
+    if verify:
+        print(f"  ⏳ Verifying search results...")
+        # Look for the query text in results
+        result = wait_for_text(query.split()[0], timeout=timeout, silent=True)
+        if result:
+            print(f"  ✓ Search results appeared")
+            return True
+        else:
+            print(f"  ✗ Search verification failed - results not found")
+            print(f"     TIP: The search might have worked but page didn't load")
+            print(f"          Try: desktop-agent wait-for-text \"{query.split()[0]}\" --timeout 15")
+            return False
+
+    return True
+
+
 def click(target, verify=None, verify_timeout=5):
     """Smart click - auto-detects target type and clicks
 
@@ -1717,6 +1813,10 @@ COMMANDS:
     wait-for-window "<name>"      Wait for window to appear and focus (timeout: 10s)
     wait-for-file "<pattern>"     Wait for file to exist (timeout: 30s)
     ensure-app "<name>"           Ensure app is running (focus or start, timeout: 10s)
+    navigate "<url>"              Navigate browser to URL (handles URL bar)
+                                  --wait-for "text"  Wait for text after load
+    web-search "<query>"          Search using browser search box (Ctrl+K)
+                                  --no-verify  Skip result verification
     pin @eN                      Pin element for stable refs
     pinned                        List pinned elements
     unpin [id]                   Unpin element(s)
@@ -1828,6 +1928,9 @@ OCR TEXT FINDING:
             target = " ".join(args)
             success = click(target, verify=verify, verify_timeout=verify_timeout)
             record_step("click", [target], f"Click text: {target[:50]}")
+
+        # Exit with proper code - CRITICAL for model to detect failures
+        sys.exit(0 if success else 1)
 
     elif cmd == "dblclick":
         if len(args) < 2:
@@ -1989,6 +2092,71 @@ OCR TEXT FINDING:
 
         app_name = " ".join(args)
         success, window_id, status = ensure_app(app_name, timeout=timeout)
+        sys.exit(0 if success else 1)
+
+    elif cmd == "navigate":
+        if not args:
+            print("Usage: navigate \"<url>\" [--wait-for \"text\"] [--timeout N]")
+            print("  Navigate browser to URL (handles URL bar automatically)")
+            print("  --wait-for   Text to wait for after navigation")
+            print("  --timeout    Maximum seconds to wait (default: 15)")
+            sys.exit(1)
+
+        # Parse --wait-for
+        wait_for = None
+        if "--wait-for" in args:
+            idx = args.index("--wait-for")
+            if idx + 1 < len(args):
+                wait_for = args[idx + 1]
+                args = args[:idx] + args[idx + 2:]
+            else:
+                print("Error: --wait-for requires a text argument")
+                sys.exit(1)
+
+        # Parse timeout
+        timeout = 15
+        if "--timeout" in args:
+            idx = args.index("--timeout")
+            if idx + 1 < len(args):
+                timeout = int(args[idx + 1])
+                args = args[:idx] + args[idx + 2:]
+            else:
+                print("Error: --timeout requires a value")
+                sys.exit(1)
+
+        url = " ".join(args)
+        success = navigate(url, wait_for=wait_for, timeout=timeout)
+        record_step("navigate", [url], f"Navigate to: {url}")
+        sys.exit(0 if success else 1)
+
+    elif cmd == "web-search":
+        if not args:
+            print("Usage: web-search \"<query>\" [--no-verify] [--timeout N]")
+            print("  Perform web search using browser search box")
+            print("  --no-verify  Skip verification of results (not recommended)")
+            print("  --timeout    Maximum seconds to wait (default: 10)")
+            sys.exit(1)
+
+        # Parse --no-verify
+        verify = True
+        if "--no-verify" in args:
+            verify = False
+            args = [a for a in args if a != "--no-verify"]
+
+        # Parse timeout
+        timeout = 10
+        if "--timeout" in args:
+            idx = args.index("--timeout")
+            if idx + 1 < len(args):
+                timeout = int(args[idx + 1])
+                args = args[:idx] + args[idx + 2:]
+            else:
+                print("Error: --timeout requires a value")
+                sys.exit(1)
+
+        query = " ".join(args)
+        success = web_search(query, verify=verify, timeout=timeout)
+        record_step("web-search", [query], f"Search: {query}")
         sys.exit(0 if success else 1)
 
     elif cmd == "pin":
