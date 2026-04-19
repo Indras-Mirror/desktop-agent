@@ -72,6 +72,7 @@ COMMANDS:
     region <x,y,w,h> [path]      Screenshot of region
     windows                        List visible windows
     focus <name>                   Focus window by name
+    click                         Click at current mouse position (no move)
     click <x> <y>                 Click at coordinates (primary monitor)
     click @eN                     Click element by ref (after snapshot -i)
     click "text"                  Click text via OCR search
@@ -178,11 +179,9 @@ OCR TEXT FINDING:
         focus_window(args[0])
 
     elif cmd == "click":
-        if len(args) < 1:
-            print(
-                'Usage: click <x> <y> | click @eN | click "text" [--verify "expected"]'
-            )
-            sys.exit(1)
+        if len(args) == 0:
+            success = click()
+            sys.exit(0 if success else 1)
 
         verify = None
         verify_timeout = 5
@@ -208,10 +207,13 @@ OCR TEXT FINDING:
         sys.exit(0 if success else 1)
 
     elif cmd == "dblclick":
-        if len(args) < 2:
-            print("Usage: dblclick <x> <y>")
+        if len(args) == 0:
+            dblclick()
+        elif len(args) >= 2:
+            dblclick(int(args[0]), int(args[1]))
+        else:
+            print("Usage: dblclick [<x> <y>]")
             sys.exit(1)
-        dblclick(int(args[0]), int(args[1]))
 
     elif cmd == "move":
         if len(args) < 2:

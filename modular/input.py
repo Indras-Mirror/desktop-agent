@@ -73,9 +73,15 @@ def click_coords(x, y, adjust_for_monitor=True):
     return True
 
 
-def dblclick(x, y, adjust_for_monitor=True):
-    """Double-click at coordinates. If adjust_for_monitor=True, x/y are relative to primary monitor."""
+def dblclick(x=None, y=None, adjust_for_monitor=True):
+    """Double-click at coordinates, or at current mouse position if no args."""
     import subprocess
+    if x is None or y is None:
+        subprocess.run(["xdotool", "click", "--repeat", "2", "--delay", "100", "1"],
+                       capture_output=True, text=True)
+        result = subprocess.run(["xdotool", "getmouselocation"], capture_output=True, text=True)
+        print(f"✓ Double-clicked at current mouse position ({result.stdout.strip()})")
+        return
     if adjust_for_monitor:
         mon = PRIMARY_MONITOR
         abs_x = x + mon['x']
@@ -246,8 +252,21 @@ def click_element(ref, force_confidence_threshold=0.5):
     return True
 
 
-def click(target, verify=None, verify_timeout=5):
+def click_here():
+    """Click at current mouse position without moving it."""
+    import subprocess
+    subprocess.run(["xdotool", "click", "1"], capture_output=True, text=True)
+    result = subprocess.run(["xdotool", "getmouselocation"], capture_output=True, text=True)
+    loc = result.stdout.strip()
+    print(f"✓ Clicked at current mouse position ({loc})")
+    return True
+
+
+def click(target=None, verify=None, verify_timeout=5):
     from .window import wait_for_text
+
+    if target is None:
+        return click_here()
 
     if isinstance(target, (tuple, list)) and len(target) == 2:
         x, y = int(target[0]), int(target[1])
