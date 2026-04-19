@@ -41,6 +41,8 @@ from .input import (
     click_element,
     dblclick,
     move,
+    scroll,
+    drag,
     execute_step,
 )
 from .atspi import pin_element, list_pinned, relink_pinned_elements
@@ -61,31 +63,41 @@ def main():
         print("""
 desktop-agent - Desktop automation CLI for AI agents
 
+MULTI-MONITOR MODE:
+    All coordinates are relative to PRIMARY MONITOR only.
+    Use 'monitor' command to see monitor configuration.
+
 COMMANDS:
-    screenshot [path]              Take full screenshot
+    screenshot [path]              Take screenshot (primary monitor only)
     region <x,y,w,h> [path]      Screenshot of region
     windows                        List visible windows
     focus <name>                   Focus window by name
-    click <x> <y>                 Click at coordinates
+    click <x> <y>                 Click at coordinates (primary monitor)
     click @eN                     Click element by ref (after snapshot -i)
     click "text"                  Click text via OCR search
     click <target> --verify "text" Click and verify expected result
-    dblclick <x> <y>              Double click
-    move <x> <y>                 Move mouse
+    dblclick <x> <y>              Double click (primary monitor)
+    scroll <x> <y> [dir] [n]    Scroll at coords (dir: up/down/left/right, n: clicks)
+    drag <x1> <y1> <x2> <y2>    Drag from start to end coordinates
+    move <x> <y>                 Move mouse (primary monitor)
     type "<text>"                 Type text
     key <keyname>                 Press key (Enter, Ctrl+c, etc.)
     active                         Get active window info
     mouse                          Get mouse position
-    snapshot                       Full UI snapshot
+    monitor                        Show primary monitor configuration
+    snapshot                       Full UI snapshot (primary monitor)
     snapshot -i                   Interactive snapshot with AT-SPI elements
     find-text [options] "<text>"  Find text using OCR
                                   --all             Return all matches as JSON
                                   --min-confidence  Min confidence (default: 75)
                                   --max-results     Max results (default: 3)
+                                  --exact-word      Match exact word only (no substrings)
     wait-for-text "<text>"        Wait for text to appear (timeout: 10s)
     wait-for-window "<name>"      Wait for window to appear and focus (timeout: 10s)
     wait-for-file "<pattern>"     Wait for file to exist (timeout: 30s)
     ensure-app "<name>"           Ensure app is running (focus or start, timeout: 10s)
+    shortcut <app> <action>       Execute app-specific keyboard shortcut
+    shortcut <app> list           List all shortcuts for an app
     navigate "<url>"              Navigate browser to URL (handles URL bar)
                                   --wait-for "text"  Wait for text after load
     web-search "<query>"          Search using browser search box (Ctrl+K)
@@ -219,6 +231,32 @@ OCR TEXT FINDING:
             sys.exit(1)
         press_key(args[0])
 
+    elif cmd == "shortcut":
+        from .shortcuts import get_shortcut, list_shortcuts
+        if len(args) < 2:
+            print("Usage: shortcut <app> <action>")
+            print("       shortcut <app> list")
+            sys.exit(1)
+
+        app_name = args[0]
+        action = args[1]
+
+        if action == "list":
+            shortcuts = list_shortcuts(app_name)
+            if shortcuts:
+                print(f"Shortcuts for {app_name}:")
+                for act, key in shortcuts.items():
+                    print(f"  {act}: {key}")
+            else:
+                print(f"No shortcuts found for {app_name}")
+        else:
+            shortcut = get_shortcut(app_name, action)
+            if shortcut:
+                print(f"Pressing {app_name} shortcut '{action}': {shortcut}")
+                press_key(shortcut)
+            else:
+                print(f"Unknown shortcut: {action} for {app_name}")
+
     elif cmd == "active":
         from .window import get_active_window
 
@@ -230,12 +268,21 @@ OCR TEXT FINDING:
 
         print(json.dumps(get_mouse_position(), indent=2))
 
+    elif cmd == "monitor":
+        from .config import PRIMARY_MONITOR
+        print("Primary Monitor:")
+        print(json.dumps(PRIMARY_MONITOR, indent=2))
+        print("\nAll coordinates are relative to the primary monitor.")
+        print(f"Absolute position: ({PRIMARY_MONITOR['x']}, {PRIMARY_MONITOR['y']})")
+        print(f"Size: {PRIMARY_MONITOR['width']}x{PRIMARY_MONITOR['height']}")
+
     elif cmd == "snapshot":
         interactive = "-i" in args or "--interactive" in args
         snapshot(interactive=interactive)
 
     elif cmd == "find-text":
         return_all = "--all" in args or "-a" in args
+        exact_word = "--exact-word" in args
         min_confidence = 75
         max_results = 3
 
@@ -254,9 +301,12 @@ OCR TEXT FINDING:
         if return_all:
             args = [a for a in args if a not in ("--all", "-a")]
 
+        if exact_word:
+            args = [a for a in args if a != "--exact-word"]
+
         if not args:
             print(
-                "Usage: find-text [--all] [--min-confidence N] [--max-results N] <text>"
+                "Usage: find-text [--all] [--min-confidence N] [--max-results N] [--exact-word] <text>"
             )
             sys.exit(1)
 
@@ -266,6 +316,7 @@ OCR TEXT FINDING:
             return_all=return_all,
             min_confidence=min_confidence,
             max_results=max_results,
+            exact_word=exact_word,
         )
 
     elif cmd == "wait-for-text":
@@ -501,6 +552,23 @@ OCR TEXT FINDING:
             print("Usage: forget <task-name>")
             sys.exit(1)
         delete_task(args[0])
+
+    elif cmd == "scroll":
+        if len(args) < 2:
+            print("Usage: scroll <x> <y> [direction] [clicks]")
+            print("  direction: up, down (default), left, right")
+            print("  clicks: number of scroll steps (default: 3)")
+            sys.exit(1)
+        x, y = int(args[0]), int(args[1])
+        direction = args[2] if len(args) > 2 else "down"
+        clicks = int(args[3]) if len(args) > 3 else 3
+        scroll(x, y, direction=direction, clicks=clicks)
+
+    elif cmd == "drag":
+        if len(args) < 4:
+            print("Usage: drag <x1> <y1> <x2> <y2>")
+            sys.exit(1)
+        drag(int(args[0]), int(args[1]), int(args[2]), int(args[3]))
 
     else:
         print(f"Unknown command: {cmd}")

@@ -1,7 +1,8 @@
-from .config import run_cmd, OCR_AVAILABLE, PIL_AVAILABLE, SCREENSHOT_DIR
+from .config import run_cmd, OCR_AVAILABLE, PIL_AVAILABLE, SCREENSHOT_DIR, PRIMARY_MONITOR
 from PIL import Image
 import json
 import math
+from pathlib import Path
 
 
 def deduplicate_by_proximity(matches, threshold=50):
@@ -35,6 +36,7 @@ def find_text_on_screen(
     min_confidence=75,
     max_results=3,
     silent=False,
+    exact_word=False,
 ):
     if not OCR_AVAILABLE:
         if not silent:
@@ -47,7 +49,13 @@ def find_text_on_screen(
         return [] if return_all else None
 
     ss_path = SCREENSHOT_DIR / "ocr_search.png"
-    screenshot(ss_path) if not silent else run_cmd(f"scrot '{ss_path}'")
+    if not silent:
+        screenshot(ss_path, primary_only=True)
+    else:
+        import subprocess
+        mon = PRIMARY_MONITOR
+        area = f"{mon['x']},{mon['y']},{mon['width']},{mon['height']}"
+        subprocess.run(["scrot", str(ss_path), "-a", area], capture_output=True, text=True)
 
     import pytesseract
 
@@ -61,7 +69,16 @@ def find_text_on_screen(
         if word:
             compare_word = word if case_sensitive else word.lower()
 
-            if search_text in compare_word or compare_word in search_text:
+            # Match logic: prefer exact/full word matches over substrings
+            is_match = False
+            if exact_word:
+                # Exact word match only
+                is_match = compare_word == search_text
+            else:
+                # Allow substring matches, but boost score for better matches
+                is_match = search_text in compare_word or compare_word in search_text
+
+            if is_match:
                 x, y, w, h = (
                     data["left"][i],
                     data["top"][i],
@@ -71,6 +88,15 @@ def find_text_on_screen(
                 conf = data["conf"][i]
 
                 if int(conf) >= min_confidence:
+                    # Boost confidence for better word matches
+                    match_quality = 1.0
+                    if compare_word == search_text:
+                        match_quality = 1.2  # Exact match bonus
+                    elif len(compare_word) >= len(search_text):
+                        match_quality = 1.1  # Full word match bonus
+
+                    adjusted_conf = min(100, int(conf * match_quality))
+
                     matches.append(
                         {
                             "text": word,
@@ -78,7 +104,8 @@ def find_text_on_screen(
                             "y": y + h // 2,
                             "width": w,
                             "height": h,
-                            "confidence": int(conf),
+                            "confidence": adjusted_conf,
+                            "original_confidence": int(conf),
                             "bounds": (x, y, w, h),
                         }
                     )
@@ -112,15 +139,20 @@ def find_text_on_screen(
         return [] if return_all else None
 
 
-def screenshot(path=None):
+def screenshot(path=None, primary_only=True):
+    """Take screenshot of primary monitor only (default)"""
+    import subprocess
     if path is None:
         path = SCREENSHOT_DIR / "screen.png"
     path = Path(path)
 
-    run_cmd(f"scrot '{path}'")
+    if primary_only:
+        mon = PRIMARY_MONITOR
+        area = f"{mon['x']},{mon['y']},{mon['width']},{mon['height']}"
+        subprocess.run(["scrot", str(path), "-a", area], capture_output=True, text=True)
+    else:
+        subprocess.run(["scrot", str(path)], capture_output=True, text=True)
+
     if path.exists():
         return str(path)
     return None
-
-
-from pathlib import Path

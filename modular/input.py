@@ -4,16 +4,26 @@ from .config import (
     ELEMENT_CACHE,
     STABLE_ELEMENT_REGISTRY,
     ATSPI_AVAILABLE,
+    PRIMARY_MONITOR,
 )
 import time
+from pathlib import Path
 
 
-def screenshot(path=None):
+def screenshot(path=None, primary_only=True):
+    """Take screenshot of primary monitor only (default) or all monitors"""
+    import subprocess
     if path is None:
         path = SCREENSHOT_DIR / "screen.png"
     path = Path(path)
 
-    run_cmd(f"scrot '{path}'")
+    if primary_only:
+        mon = PRIMARY_MONITOR
+        area = f"{mon['x']},{mon['y']},{mon['width']},{mon['height']}"
+        subprocess.run(["scrot", str(path), "-a", area], capture_output=True, text=True)
+    else:
+        subprocess.run(["scrot", str(path)], capture_output=True, text=True)
+
     if path.exists():
         print(f"Screenshot saved to {path}")
         return str(path)
@@ -37,33 +47,115 @@ def region_screenshot(x, y, width, height, path=None):
 
 
 def focus_window(name):
-    run_cmd(f'xdotool search --onlyvisible --name "{name}" windowactivate')
+    import subprocess
+    result = subprocess.run(
+        ["xdotool", "search", "--onlyvisible", "--name", name],
+        capture_output=True, text=True
+    )
+    if result.stdout.strip():
+        wid = result.stdout.strip().split('\n')[0]
+        subprocess.run(["xdotool", "windowactivate", wid],
+                       capture_output=True, text=True)
 
 
-def click_coords(x, y):
-    run_cmd(f"xdotool mousemove {x} {y} click 1")
-    print(f"✓ Clicked at ({x}, {y})")
+def click_coords(x, y, adjust_for_monitor=True):
+    """Click at coordinates. If adjust_for_monitor=True, x/y are relative to primary monitor."""
+    if adjust_for_monitor:
+        # Adjust coordinates to absolute position (add monitor offset)
+        mon = PRIMARY_MONITOR
+        abs_x = x + mon['x']
+        abs_y = y + mon['y']
+        run_cmd(f"xdotool mousemove {abs_x} {abs_y} click 1")
+        print(f"✓ Clicked at ({x}, {y}) on primary monitor (absolute: {abs_x}, {abs_y})")
+    else:
+        run_cmd(f"xdotool mousemove {x} {y} click 1")
+        print(f"✓ Clicked at ({x}, {y})")
     return True
 
 
-def dblclick(x, y):
-    run_cmd(f"xdotool mousemove {x} {y} click 1 click 1")
-    print(f"✓ Double-clicked at ({x}, {y})")
+def dblclick(x, y, adjust_for_monitor=True):
+    """Double-click at coordinates. If adjust_for_monitor=True, x/y are relative to primary monitor."""
+    import subprocess
+    if adjust_for_monitor:
+        mon = PRIMARY_MONITOR
+        abs_x = x + mon['x']
+        abs_y = y + mon['y']
+    else:
+        abs_x, abs_y = x, y
+    subprocess.run(["xdotool", "mousemove", str(abs_x), str(abs_y),
+                    "click", "--repeat", "2", "--delay", "100", "1"],
+                   capture_output=True, text=True)
+    print(f"✓ Double-clicked at ({x}, {y})" +
+          (f" on primary monitor (absolute: {abs_x}, {abs_y})" if adjust_for_monitor else ""))
 
 
-def move(x, y):
-    run_cmd(f"xdotool mousemove {x} {y}")
-    print(f"✓ Moved to ({x}, {y})")
+def move(x, y, adjust_for_monitor=True):
+    """Move mouse. If adjust_for_monitor=True, x/y are relative to primary monitor."""
+    if adjust_for_monitor:
+        mon = PRIMARY_MONITOR
+        abs_x = x + mon['x']
+        abs_y = y + mon['y']
+        run_cmd(f"xdotool mousemove {abs_x} {abs_y}")
+        print(f"✓ Moved to ({x}, {y}) on primary monitor (absolute: {abs_x}, {abs_y})")
+    else:
+        run_cmd(f"xdotool mousemove {x} {y}")
+        print(f"✓ Moved to ({x}, {y})")
 
 
 def type_text(text):
-    run_cmd(f'xdotool type --delay 50 "{text}"')
+    import subprocess
+    subprocess.run(["xdotool", "type", "--delay", "50", "--clearmodifiers", text],
+                   capture_output=True, text=True)
     print(f"✓ Typed: {text}")
 
 
 def press_key(key):
-    run_cmd(f"xdotool key {key}")
+    import subprocess
+    subprocess.run(["xdotool", "key", "--clearmodifiers", key],
+                   capture_output=True, text=True)
     print(f"✓ Pressed: {key}")
+
+
+def scroll(x, y, direction="down", clicks=3, adjust_for_monitor=True):
+    """Scroll at coordinates. direction: up/down/left/right"""
+    import subprocess
+    if adjust_for_monitor:
+        mon = PRIMARY_MONITOR
+        abs_x = x + mon['x']
+        abs_y = y + mon['y']
+    else:
+        abs_x, abs_y = x, y
+
+    button_map = {"down": "5", "up": "4", "left": "6", "right": "7"}
+    button = button_map.get(direction, "5")
+
+    subprocess.run(["xdotool", "mousemove", str(abs_x), str(abs_y)],
+                   capture_output=True, text=True)
+    for _ in range(clicks):
+        subprocess.run(["xdotool", "click", button],
+                       capture_output=True, text=True)
+
+    print(f"✓ Scrolled {direction} {clicks}x at ({x}, {y})")
+    return True
+
+
+def drag(start_x, start_y, end_x, end_y, adjust_for_monitor=True):
+    """Drag from start to end coordinates"""
+    import subprocess
+    if adjust_for_monitor:
+        mon = PRIMARY_MONITOR
+        sx = start_x + mon['x']
+        sy = start_y + mon['y']
+        ex = end_x + mon['x']
+        ey = end_y + mon['y']
+    else:
+        sx, sy, ex, ey = start_x, start_y, end_x, end_y
+
+    subprocess.run(["xdotool", "mousemove", str(sx), str(sy),
+                    "mousedown", "1", "mousemove", "--sync", str(ex), str(ey),
+                    "mouseup", "1"], capture_output=True, text=True)
+    print(f"✓ Dragged from ({start_x}, {start_y}) to ({end_x}, {end_y})")
+    return True
 
 
 def execute_step(step):
@@ -211,6 +303,3 @@ def click(target, verify=None, verify_timeout=5):
             return False
 
     return success
-
-
-from pathlib import Path

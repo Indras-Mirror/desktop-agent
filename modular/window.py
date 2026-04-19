@@ -82,8 +82,13 @@ def wait_for_window(name, timeout=10, interval=0.5, auto_focus=True):
             print(f"✓ Window {name} found after {elapsed:.1f}s (ID: {window_id})")
 
             if auto_focus:
+                # More reliable focus: activate + raise + sync
                 run_cmd(f"xdotool windowactivate {window_id}")
+                time.sleep(0.2)
+                run_cmd(f"xdotool windowraise {window_id}")
                 time.sleep(0.3)
+                run_cmd(f"xdotool windowfocus {window_id}")
+                time.sleep(0.2)
                 print(f"✓ Focused window {name}")
 
             return window_id
@@ -91,6 +96,16 @@ def wait_for_window(name, timeout=10, interval=0.5, auto_focus=True):
 
     print(f"✗ Timeout: Window {name} not found after {timeout}s")
     return None
+
+
+def ensure_window_focused(name, timeout=5):
+    """Ensure a window is focused, waiting if needed"""
+    active = get_active_window()
+    if name.lower() in active['name'].lower():
+        print(f"✓ Window already focused: {active['name']}")
+        return True
+
+    return wait_for_window(name, timeout=timeout, auto_focus=True) is not None
 
 
 def wait_for_file(pattern, timeout=30, interval=1.0):
@@ -146,15 +161,16 @@ def ensure_app(app_name, timeout=10):
 
 
 def navigate(url, wait_for=None, timeout=15):
+    import subprocess
     print(f"🌐 Navigating to {url}...")
 
-    run_cmd("xdotool key ctrl+l")
+    subprocess.run(["xdotool", "key", "ctrl+l"], capture_output=True, text=True)
     time.sleep(0.5)
 
-    run_cmd(f'xdotool type "{url}"')
+    subprocess.run(["xdotool", "type", "--clearmodifiers", url], capture_output=True, text=True)
     time.sleep(0.3)
 
-    run_cmd("xdotool key Return")
+    subprocess.run(["xdotool", "key", "Return"], capture_output=True, text=True)
     print(f"✓ Navigated to {url}")
 
     if wait_for:
@@ -172,16 +188,17 @@ def navigate(url, wait_for=None, timeout=15):
 
 
 def web_search(query, verify=True, timeout=10):
+    import subprocess
     print(f"🔍 Searching for: {query}")
 
-    run_cmd("xdotool key ctrl+k")
+    subprocess.run(["xdotool", "key", "ctrl+k"], capture_output=True, text=True)
     time.sleep(0.8)
 
-    run_cmd(f'xdotool type "{query}"')
+    subprocess.run(["xdotool", "type", "--clearmodifiers", query], capture_output=True, text=True)
     time.sleep(0.5)
     print(f"✓ Typed search query: {query}")
 
-    run_cmd("xdotool key Return")
+    subprocess.run(["xdotool", "key", "Return"], capture_output=True, text=True)
     print(f"✓ Submitted search")
 
     if verify:

@@ -3,6 +3,7 @@ from .config import (
     ATSPI_AVAILABLE,
     PIL_AVAILABLE,
     SCREENSHOT_DIR,
+    PRIMARY_MONITOR,
     run_cmd,
 )
 from .window import get_active_window, get_mouse_position, get_screen_size, list_windows
@@ -53,12 +54,19 @@ def snapshot(interactive=False):
             except:
                 pass
 
-        screen_w, screen_h = get_screen_size()
+        # Filter elements to primary monitor only
+        mon = PRIMARY_MONITOR
 
         visible_elements = []
         for elem in all_elements:
             if elem["width"] > 5 and elem["height"] > 5:
-                if 0 <= elem["x"] < screen_w and 0 <= elem["y"] < screen_h:
+                # Check if element is within primary monitor bounds
+                if (mon['x'] <= elem["x"] < mon['x'] + mon['width'] and
+                    mon['y'] <= elem["y"] < mon['y'] + mon['height']):
+                    # Adjust coordinates to be relative to primary monitor
+                    elem["x"] -= mon['x']
+                    elem["y"] -= mon['y']
+                    elem["bounds"] = (elem["bounds"][0] - mon['x'], elem["bounds"][1] - mon['y'])
                     visible_elements.append(elem)
 
         visible_elements.sort(key=lambda e: (e["y"], e["x"]))
@@ -121,18 +129,23 @@ def snapshot(interactive=False):
     }
 
 
-def screenshot(path=None):
+def screenshot(path=None, primary_only=True):
+    """Take screenshot of primary monitor only (default)"""
+    import subprocess
     if path is None:
         path = SCREENSHOT_DIR / "screen.png"
     path = Path(path)
 
-    run_cmd(f"scrot '{path}'")
+    if primary_only:
+        mon = PRIMARY_MONITOR
+        area = f"{mon['x']},{mon['y']},{mon['width']},{mon['height']}"
+        subprocess.run(["scrot", str(path), "-a", area], capture_output=True, text=True)
+    else:
+        subprocess.run(["scrot", str(path)], capture_output=True, text=True)
+
     if path.exists():
         print(f"Screenshot saved to {path}")
         return str(path)
     else:
         print(f"Error: Screenshot failed")
         return None
-
-
-from pathlib import Path
