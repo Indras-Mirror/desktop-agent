@@ -69,13 +69,14 @@ def find_text_on_screen(
         if word:
             compare_word = word if case_sensitive else word.lower()
 
-            # Match logic: prefer exact/full word matches over substrings
             is_match = False
             if exact_word:
-                # Exact word match only
+                is_match = compare_word == search_text
+            elif compare_word == search_text:
+                is_match = True
+            elif ' ' not in search_text and len(search_text) >= 3:
                 is_match = compare_word == search_text
             else:
-                # Allow substring matches, but boost score for better matches
                 is_match = search_text in compare_word or compare_word in search_text
 
             if is_match:
