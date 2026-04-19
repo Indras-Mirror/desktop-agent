@@ -15,7 +15,7 @@ Linux desktop automation CLI for AI agents with AT-SPI element detection, OCR te
 
 ### Credentials
 - **User**: Indras-Mirror (Excidos)
-- **Token**: `[REDACTED]`
+- **Token**: `[REDACTED - use git credential store]`
 - **Email**: malichcoory@gmail.com
 
 ### Branches
@@ -313,7 +313,7 @@ desktop-agent replay "I want to play music"
 - **User**: mal (malichcoory@gmail.com)
 - **System**: Linux (Cinnamon desktop)
 - **Embedding Server**: Running at localhost:9086 (from Odin project)
-- **Token used for GitHub**: [REDACTED]
+- **Token used for GitHub**: [REDACTED - use git credential store]
 
 ---
 
