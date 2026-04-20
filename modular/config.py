@@ -76,24 +76,24 @@ def cosine_similarity(a, b):
 
 def get_primary_monitor():
     """Get primary monitor geometry (x, y, width, height)"""
-    stdout, _, _ = run_cmd("xrandr --query | grep ' connected primary'")
+    result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True)
+    if result.returncode != 0:
+        return {"x": 0, "y": 0, "width": 1920, "height": 1080}
 
-    if stdout:
-        # Parse: "DP-2 connected primary 3440x1440+1920+322 ..."
-        match = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', stdout)
-        if match:
-            width, height, x, y = map(int, match.groups())
-            return {"x": x, "y": y, "width": width, "height": height}
+    for line in result.stdout.split("\n"):
+        if " connected primary" in line:
+            m = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', line)
+            if m:
+                width, height, x, y = map(int, m.groups())
+                return {"x": x, "y": y, "width": width, "height": height}
 
-    # Fallback: try first connected monitor
-    stdout, _, _ = run_cmd("xrandr --query | grep ' connected' | head -1")
-    if stdout:
-        match = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', stdout)
-        if match:
-            width, height, x, y = map(int, match.groups())
-            return {"x": x, "y": y, "width": width, "height": height}
+    for line in result.stdout.split("\n"):
+        if " connected" in line:
+            m = re.search(r'(\d+)x(\d+)\+(\d+)\+(\d+)', line)
+            if m:
+                width, height, x, y = map(int, m.groups())
+                return {"x": x, "y": y, "width": width, "height": height}
 
-    # Ultimate fallback
     return {"x": 0, "y": 0, "width": 1920, "height": 1080}
 
 

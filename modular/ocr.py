@@ -1,4 +1,4 @@
-from .config import run_cmd, OCR_AVAILABLE, PIL_AVAILABLE, SCREENSHOT_DIR, PRIMARY_MONITOR
+from .config import OCR_AVAILABLE, PIL_AVAILABLE, SCREENSHOT_DIR, PRIMARY_MONITOR
 from PIL import Image
 import json
 import math
@@ -48,14 +48,10 @@ def find_text_on_screen(
             print("⚠️  PIL not available. Install with: pip3 install Pillow")
         return [] if return_all else None
 
+    from .input import screenshot as take_screenshot
+
     ss_path = SCREENSHOT_DIR / "ocr_search.png"
-    if not silent:
-        screenshot(ss_path, primary_only=True)
-    else:
-        import subprocess
-        mon = PRIMARY_MONITOR
-        area = f"{mon['x']},{mon['y']},{mon['width']},{mon['height']}"
-        subprocess.run(["scrot", str(ss_path), "-a", area], capture_output=True, text=True)
+    take_screenshot(ss_path, primary_only=True)
 
     import pytesseract
 
@@ -63,53 +59,93 @@ def find_text_on_screen(
     data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
 
     search_text = text if case_sensitive else text.lower()
+    search_words = search_text.split()
+    is_phrase = len(search_words) > 1
     matches = []
 
-    for i, word in enumerate(data["text"]):
-        if word:
-            compare_word = word if case_sensitive else word.lower()
-
-            is_match = False
-            if exact_word:
-                is_match = compare_word == search_text
-            elif compare_word == search_text:
-                is_match = True
-            elif ' ' not in search_text and len(search_text) >= 3:
-                is_match = compare_word == search_text
+    if is_phrase:
+        for i in range(len(data["text"]) - len(search_words) + 1):
+            consecutive = []
+            for j, sw in enumerate(search_words):
+                idx = i + j
+                word = data["text"][idx]
+                if not word:
+                    break
+                cw = word if case_sensitive else word.lower()
+                if exact_word:
+                    if cw != sw:
+                        break
+                else:
+                    if cw != sw and sw not in cw and cw not in sw:
+                        break
+                consecutive.append(idx)
             else:
-                is_match = search_text in compare_word or compare_word in search_text
+                if len(consecutive) == len(search_words):
+                    first, last = consecutive[0], consecutive[-1]
+                    x1 = data["left"][first]
+                    y1 = min(data["top"][idx] for idx in consecutive)
+                    x2 = data["left"][last] + data["width"][last]
+                    y2 = max(data["top"][idx] + data["height"][idx] for idx in consecutive)
+                    confs = [int(data["conf"][idx]) for idx in consecutive]
+                    avg_conf = sum(confs) // len(confs)
 
-            if is_match:
-                x, y, w, h = (
-                    data["left"][i],
-                    data["top"][i],
-                    data["width"][i],
-                    data["height"][i],
-                )
-                conf = data["conf"][i]
+                    if avg_conf >= min_confidence:
+                        matched_text = " ".join(data["text"][idx] for idx in consecutive)
+                        matches.append({
+                            "text": matched_text,
+                            "x": (x1 + x2) // 2,
+                            "y": (y1 + y2) // 2,
+                            "width": x2 - x1,
+                            "height": y2 - y1,
+                            "confidence": min(100, int(avg_conf * 1.2)) if matched_text.lower() == search_text else avg_conf,
+                            "original_confidence": avg_conf,
+                            "bounds": (x1, y1, x2 - x1, y2 - y1),
+                        })
+    else:
+        for i, word in enumerate(data["text"]):
+            if word:
+                compare_word = word if case_sensitive else word.lower()
 
-                if int(conf) >= min_confidence:
-                    # Boost confidence for better word matches
-                    match_quality = 1.0
-                    if compare_word == search_text:
-                        match_quality = 1.2  # Exact match bonus
-                    elif len(compare_word) >= len(search_text):
-                        match_quality = 1.1  # Full word match bonus
+                is_match = False
+                if exact_word:
+                    is_match = compare_word == search_text
+                elif compare_word == search_text:
+                    is_match = True
+                elif len(search_text) >= 3:
+                    is_match = compare_word == search_text
+                else:
+                    is_match = search_text in compare_word or compare_word in search_text
 
-                    adjusted_conf = min(100, int(conf * match_quality))
-
-                    matches.append(
-                        {
-                            "text": word,
-                            "x": x + w // 2,
-                            "y": y + h // 2,
-                            "width": w,
-                            "height": h,
-                            "confidence": adjusted_conf,
-                            "original_confidence": int(conf),
-                            "bounds": (x, y, w, h),
-                        }
+                if is_match:
+                    x, y, w, h = (
+                        data["left"][i],
+                        data["top"][i],
+                        data["width"][i],
+                        data["height"][i],
                     )
+                    conf = data["conf"][i]
+
+                    if int(conf) >= min_confidence:
+                        match_quality = 1.0
+                        if compare_word == search_text:
+                            match_quality = 1.2
+                        elif len(compare_word) >= len(search_text):
+                            match_quality = 1.1
+
+                        adjusted_conf = min(100, int(conf * match_quality))
+
+                        matches.append(
+                            {
+                                "text": word,
+                                "x": x + w // 2,
+                                "y": y + h // 2,
+                                "width": w,
+                                "height": h,
+                                "confidence": adjusted_conf,
+                                "original_confidence": int(conf),
+                                "bounds": (x, y, w, h),
+                            }
+                        )
 
     matches = deduplicate_by_proximity(matches, threshold=50)
     matches.sort(key=lambda m: m["confidence"], reverse=True)
@@ -140,20 +176,3 @@ def find_text_on_screen(
         return [] if return_all else None
 
 
-def screenshot(path=None, primary_only=True):
-    """Take screenshot of primary monitor only (default)"""
-    import subprocess
-    if path is None:
-        path = SCREENSHOT_DIR / "screen.png"
-    path = Path(path)
-
-    if primary_only:
-        mon = PRIMARY_MONITOR
-        area = f"{mon['x']},{mon['y']},{mon['width']},{mon['height']}"
-        subprocess.run(["scrot", str(path), "-a", area], capture_output=True, text=True)
-    else:
-        subprocess.run(["scrot", str(path)], capture_output=True, text=True)
-
-    if path.exists():
-        return str(path)
-    return None

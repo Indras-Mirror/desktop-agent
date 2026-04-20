@@ -1,11 +1,11 @@
 from .config import (
-    run_cmd,
     SCREENSHOT_DIR,
     ELEMENT_CACHE,
     STABLE_ELEMENT_REGISTRY,
     ATSPI_AVAILABLE,
     PRIMARY_MONITOR,
 )
+import subprocess
 import time
 from pathlib import Path
 
@@ -37,7 +37,8 @@ def region_screenshot(x, y, width, height, path=None):
         path = SCREENSHOT_DIR / "region.png"
     path = Path(path)
 
-    run_cmd(f"scrot '{path}' -a {x},{y},{width},{height}")
+    area = f"{x},{y},{width},{height}"
+    subprocess.run(["scrot", str(path), "-a", area], capture_output=True, text=True)
     if path.exists():
         print(f"Region screenshot saved to {path}")
         return str(path)
@@ -59,17 +60,17 @@ def focus_window(name):
 
 
 def click_coords(x, y, adjust_for_monitor=True):
-    """Click at coordinates. If adjust_for_monitor=True, x/y are relative to primary monitor."""
     if adjust_for_monitor:
-        # Adjust coordinates to absolute position (add monitor offset)
         mon = PRIMARY_MONITOR
         abs_x = x + mon['x']
         abs_y = y + mon['y']
-        run_cmd(f"xdotool mousemove {abs_x} {abs_y} click 1")
-        print(f"✓ Clicked at ({x}, {y}) on primary monitor (absolute: {abs_x}, {abs_y})")
+        subprocess.run(["xdotool", "mousemove", str(abs_x), str(abs_y), "click", "1"],
+                       capture_output=True, text=True)
+        print(f"Clicked at ({x}, {y}) on primary monitor (absolute: {abs_x}, {abs_y})")
     else:
-        run_cmd(f"xdotool mousemove {x} {y} click 1")
-        print(f"✓ Clicked at ({x}, {y})")
+        subprocess.run(["xdotool", "mousemove", str(x), str(y), "click", "1"],
+                       capture_output=True, text=True)
+        print(f"Clicked at ({x}, {y})")
     return True
 
 
@@ -95,17 +96,39 @@ def dblclick(x=None, y=None, adjust_for_monitor=True):
           (f" on primary monitor (absolute: {abs_x}, {abs_y})" if adjust_for_monitor else ""))
 
 
-def move(x, y, adjust_for_monitor=True):
-    """Move mouse. If adjust_for_monitor=True, x/y are relative to primary monitor."""
+def rightclick(x=None, y=None, adjust_for_monitor=True):
+    """Right-click at coordinates, or at current mouse position if no args."""
+    import subprocess
+    if x is None or y is None:
+        subprocess.run(["xdotool", "click", "3"], capture_output=True, text=True)
+        result = subprocess.run(["xdotool", "getmouselocation"], capture_output=True, text=True)
+        print(f"✓ Right-clicked at current mouse position ({result.stdout.strip()})")
+        return True
     if adjust_for_monitor:
         mon = PRIMARY_MONITOR
         abs_x = x + mon['x']
         abs_y = y + mon['y']
-        run_cmd(f"xdotool mousemove {abs_x} {abs_y}")
-        print(f"✓ Moved to ({x}, {y}) on primary monitor (absolute: {abs_x}, {abs_y})")
     else:
-        run_cmd(f"xdotool mousemove {x} {y}")
-        print(f"✓ Moved to ({x}, {y})")
+        abs_x, abs_y = x, y
+    subprocess.run(["xdotool", "mousemove", str(abs_x), str(abs_y), "click", "3"],
+                   capture_output=True, text=True)
+    print(f"✓ Right-clicked at ({x}, {y})" +
+          (f" on primary monitor (absolute: {abs_x}, {abs_y})" if adjust_for_monitor else ""))
+    return True
+
+
+def move(x, y, adjust_for_monitor=True):
+    if adjust_for_monitor:
+        mon = PRIMARY_MONITOR
+        abs_x = x + mon['x']
+        abs_y = y + mon['y']
+        subprocess.run(["xdotool", "mousemove", str(abs_x), str(abs_y)],
+                       capture_output=True, text=True)
+        print(f"Moved to ({x}, {y}) on primary monitor (absolute: {abs_x}, {abs_y})")
+    else:
+        subprocess.run(["xdotool", "mousemove", str(x), str(y)],
+                       capture_output=True, text=True)
+        print(f"Moved to ({x}, {y})")
 
 
 def type_text(text):
@@ -252,13 +275,14 @@ def click_element(ref, force_confidence_threshold=0.5):
     return True
 
 
-def click_here():
+def click_here(button=1):
     """Click at current mouse position without moving it."""
     import subprocess
-    subprocess.run(["xdotool", "click", "1"], capture_output=True, text=True)
+    subprocess.run(["xdotool", "click", str(button)], capture_output=True, text=True)
     result = subprocess.run(["xdotool", "getmouselocation"], capture_output=True, text=True)
     loc = result.stdout.strip()
-    print(f"✓ Clicked at current mouse position ({loc})")
+    btn_name = {1: "left", 2: "middle", 3: "right"}.get(button, str(button))
+    print(f"✓ {btn_name.capitalize()}-clicked at current mouse position ({loc})")
     return True
 
 

@@ -6,7 +6,6 @@ from .config import (
     RECORDING_BUFFER,
     get_embedding,
     cosine_similarity,
-    run_cmd,
 )
 import json
 import time

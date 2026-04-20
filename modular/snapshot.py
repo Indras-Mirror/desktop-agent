@@ -4,9 +4,9 @@ from .config import (
     PIL_AVAILABLE,
     SCREENSHOT_DIR,
     PRIMARY_MONITOR,
-    run_cmd,
 )
 from .window import get_active_window, get_mouse_position, get_screen_size, list_windows
+from .input import screenshot
 from .atspi import walk_tree
 from PIL import Image, ImageDraw
 
@@ -129,23 +129,3 @@ def snapshot(interactive=False):
     }
 
 
-def screenshot(path=None, primary_only=True):
-    """Take screenshot of primary monitor only (default)"""
-    import subprocess
-    if path is None:
-        path = SCREENSHOT_DIR / "screen.png"
-    path = Path(path)
-
-    if primary_only:
-        mon = PRIMARY_MONITOR
-        area = f"{mon['x']},{mon['y']},{mon['width']},{mon['height']}"
-        subprocess.run(["scrot", str(path), "-a", area], capture_output=True, text=True)
-    else:
-        subprocess.run(["scrot", str(path)], capture_output=True, text=True)
-
-    if path.exists():
-        print(f"Screenshot saved to {path}")
-        return str(path)
-    else:
-        print(f"Error: Screenshot failed")
-        return None

@@ -12,14 +12,19 @@ from .task_system import (
     delete_task,
 )
 from .input import (
+    focus_window,
     screenshot,
     region_screenshot,
     type_text,
     press_key,
     click,
     click_element,
+    click_here,
     dblclick,
+    rightclick,
     move,
+    scroll,
+    drag,
     execute_step,
 )
 from .window import (
@@ -30,20 +35,6 @@ from .window import (
     ensure_app,
     navigate,
     web_search,
-)
-from .input import (
-    focus_window,
-    screenshot,
-    region_screenshot,
-    type_text,
-    press_key,
-    click,
-    click_element,
-    dblclick,
-    move,
-    scroll,
-    drag,
-    execute_step,
 )
 from .atspi import pin_element, list_pinned, relink_pinned_elements
 from .snapshot import snapshot
@@ -77,9 +68,14 @@ COMMANDS:
     click @eN                     Click element by ref (after snapshot -i)
     click "text"                  Click text via OCR search
     click <target> --verify "text" Click and verify expected result
-    dblclick <x> <y>              Double click (primary monitor)
+    dblclick [<x> <y>]            Double click (at coords or current position)
+    rightclick [<x> <y>]          Right click (at coords or current position)
     scroll <x> <y> [dir] [n]    Scroll at coords (dir: up/down/left/right, n: clicks)
     drag <x1> <y1> <x2> <y2>    Drag from start to end coordinates
+    media <action> [options]     Media player control via D-Bus MPRIS
+                                  Actions: play, pause, toggle, next, prev, stop, status, players
+                                  --player <name>  Target specific player
+                                  --uri <url>      Open URI (with action=open)
     move <x> <y>                 Move mouse (primary monitor)
     type "<text>"                 Type text
     key <keyname>                 Press key (Enter, Ctrl+c, etc.)
@@ -214,6 +210,37 @@ OCR TEXT FINDING:
         else:
             print("Usage: dblclick [<x> <y>]")
             sys.exit(1)
+
+    elif cmd == "rightclick":
+        if len(args) == 0:
+            rightclick()
+        elif len(args) >= 2:
+            rightclick(int(args[0]), int(args[1]))
+        else:
+            print("Usage: rightclick [<x> <y>]")
+            sys.exit(1)
+
+    elif cmd == "media":
+        from .media import media_command
+        if not args:
+            print("Usage: media <action> [--player name] [--uri url]")
+            print("  Actions: play, pause, toggle, next, prev, stop, status, players, open")
+            sys.exit(1)
+        action = args[0]
+        player_name = None
+        uri = None
+        i = 1
+        while i < len(args):
+            if args[i] == "--player" and i + 1 < len(args):
+                player_name = args[i + 1]
+                i += 2
+            elif args[i] == "--uri" and i + 1 < len(args):
+                uri = args[i + 1]
+                i += 2
+            else:
+                i += 1
+        success = media_command(action, player_name=player_name, uri=uri)
+        sys.exit(0 if success else 1)
 
     elif cmd == "move":
         if len(args) < 2:

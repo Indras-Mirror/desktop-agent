@@ -1,4 +1,4 @@
-from .config import run_cmd, ATSPI_AVAILABLE, ELEMENT_CACHE, STABLE_ELEMENT_REGISTRY
+from .config import ATSPI_AVAILABLE, ELEMENT_CACHE, STABLE_ELEMENT_REGISTRY
 from difflib import SequenceMatcher
 import math
 
