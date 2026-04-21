@@ -2,7 +2,9 @@
 
 **Linux desktop automation CLI with AI-curated task recording and semantic search**
 
-**Modular architecture** - Works with Quetzacodetl, OpenCode, and Claude-Code
+**Modular architecture** — Works natively with QuetzaCodetl, OpenCode, and Claude Code as a built-in Bash-invoked tool.
+
+> **QuetzaCodetl Integration:** `desktop-agent` is available as a native skill in QuetzaCodetl. The model can invoke it directly via Bash commands for Linux desktop automation without any MCP connection.
 
 ---
 
@@ -63,11 +65,12 @@ desktop-agent save-task my-task --description "What it does" --purpose "Why usef
 
 ## 📊 Current Status
 
-- **35 tasks** in repository
+- **35+ tasks** in repository
 - **11 micro-tasks** extracted
 - **100% success rate** on executed tasks
-- **Parameters working** (3 parameterized tasks)
+- **Parameters working** (3+ parameterized tasks)
 - **Success tracking active**
+- **QuetzaCodetl native skill** — invoked via Bash, no MCP required
 
 ---
 
@@ -174,5 +177,5 @@ desktop-agent save-task my-workflow \
 ---
 
 **Version:** 2.1 - Parameters + Success Tracking + Micro-Tasks  
-**Last Updated:** 2026-04-16  
-**Status:** Production Ready
+**Last Updated:** 2026-04-22  
+**Status:** Production Ready — Integrated with QuetzaCodetl native tool suite
