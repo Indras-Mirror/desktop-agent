@@ -33,6 +33,13 @@ try:
 except ImportError:
     OCR_AVAILABLE = False
 
+try:
+    from rapidocr_onnxruntime import RapidOCR
+
+    RAPIDOCR_AVAILABLE = True
+except ImportError:
+    RAPIDOCR_AVAILABLE = False
+
 CACHE_DIR = Path.home() / ".cache" / "desktop-agent"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = CACHE_DIR / "tasks.db"

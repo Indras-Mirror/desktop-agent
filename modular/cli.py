@@ -39,6 +39,7 @@ from .window import (
 from .atspi import pin_element, list_pinned, relink_pinned_elements
 from .snapshot import snapshot
 from .ocr import find_text_on_screen
+from .analyze import analyze as analyze_screen
 
 
 def main():
@@ -132,6 +133,12 @@ EXAMPLES:
     desktop-agent save-task play-spotify-aeternum --description "Play Aeternum playlist" --purpose "Gaming background music"
     desktop-agent tasks search "play music"
     desktop-agent replay --run "play music"
+
+SCREEN ANALYSIS (AI-powered vision replacement):
+    analyze                        Unified screen analysis for AI agents
+                                   Combines AT-SPI tree + OCR + layout zones
+                                   into a ~500-token structured output
+    analyze --json                 Same but raw JSON for programmatic use
 
 AT-SPI ELEMENT DETECTION:
     Run snapshot -i to scan for interactive UI elements
@@ -304,6 +311,10 @@ OCR TEXT FINDING:
         print("\nAll coordinates are relative to the primary monitor.")
         print(f"Absolute position: ({PRIMARY_MONITOR['x']}, {PRIMARY_MONITOR['y']})")
         print(f"Size: {PRIMARY_MONITOR['width']}x{PRIMARY_MONITOR['height']}")
+
+    elif cmd == "analyze":
+        json_format = "--json" in args or "-j" in args
+        analyze_screen(output_format="json" if json_format else "text")
 
     elif cmd == "snapshot":
         interactive = "-i" in args or "--interactive" in args
