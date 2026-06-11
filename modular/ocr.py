@@ -239,6 +239,7 @@ def _ocr_rapidocr(img, upscale=True):
     if engine is None:
         return []
 
+    scale = 1
     if upscale:
         img, scale = _upscale_image(img, scale=2)
 
@@ -275,6 +276,10 @@ def _ocr_rapidocr(img, upscale=True):
             "confidence": int(float(conf) * 100) if conf else 80,
             "source": "rapidocr",
         })
+
+    # Map coordinates back to the original (pre-upscale) image
+    if scale != 1:
+        _scale_coords(regions, scale)
 
     regions = _merge_adjacent_words(regions)
     return regions

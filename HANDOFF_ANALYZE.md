@@ -7,6 +7,39 @@
 
 ---
 
+## UPDATE 2026-06-11 — v2 (branch `experimental-analyze-v2`)
+
+Several P0/P2 items below are now DONE:
+
+- **Persistent element refs** — analyze assigns `@e1..` to elements and `@t1..`
+  to OCR text, persisted to `~/.cache/desktop-agent/elements.json` via the new
+  `modular/element_cache.py`. `desktop-agent click @e3` now works from a
+  *separate process* (previously ELEMENT_CACHE was in-memory only, so
+  snapshot→click across two CLI invocations could never work). `snapshot -i`
+  persists its refs too. New `desktop-agent refs` command lists the cache.
+- **Detail levels** — `--quick` (AT-SPI only, no screenshot/OCR, ~0.7s),
+  default, `--deep` (80 elements / 60 texts).
+- **Change detection** — `analyze --diff` reports window/element/text changes
+  vs the previous run (cached in `~/.cache/desktop-agent/last_analyze.json`).
+- **Region targeting** — `--region top|bottom|left|right|center` or
+  `--region x,y,w,h` filters AT-SPI elements and crops the screenshot before
+  OCR (faster, less background noise).
+- **Bugfix: RapidOCR coordinates** — `_ocr_rapidocr` upscaled the image 2x but
+  never scaled coordinates back; every OCR coordinate was ~1.16x–2x off.
+  Click-by-text was missing its targets because of this.
+- **Bugfix: `click_element` called `click(x, y)`** — that signature passes y as
+  the `verify` argument and always failed with "Invalid click target". Now uses
+  `click_coords()`.
+
+The agent loop is now:
+```bash
+desktop-agent analyze --json    # see (refs included)
+desktop-agent click @e3         # act (resolves ref from disk cache)
+desktop-agent analyze --diff    # verify (what changed?)
+```
+
+---
+
 ## Table of Contents
 1. [What It Is](#1-what-it-is)
 2. [Design Philosophy](#2-design-philosophy)

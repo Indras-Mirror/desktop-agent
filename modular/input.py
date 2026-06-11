@@ -198,10 +198,10 @@ def execute_step(step):
         if args:
             focus_window(args[0])
     elif cmd == "click":
-        if args and args[0].startswith("@e"):
+        if args and (args[0].startswith("@e") or args[0].startswith("@t")):
             click_element(args[0])
         elif len(args) >= 2:
-            click(int(args[0]), int(args[1]))
+            click((int(args[0]), int(args[1])))
     elif cmd == "type":
         if args:
             type_text(" ".join(args))
@@ -237,7 +237,22 @@ def click_element(ref, force_confidence_threshold=0.5):
             results = relink_pinned_elements()
 
         if ref not in ELEMENT_CACHE:
-            print(f"Error: Element {ref} not found. Run snapshot -i first.")
+            # Each CLI command is a fresh process, so the in-memory cache
+            # from a previous analyze/snapshot is gone — try the disk cache.
+            from .element_cache import load_ref, STALE_AFTER_SEC
+
+            entry = load_ref(ref)
+            if entry:
+                age = int(entry["age_sec"])
+                if age > STALE_AFTER_SEC:
+                    print(f"⚠ {ref} cached {age}s ago by {entry['source']} — "
+                          f"screen may have changed. Re-run analyze if this misses.")
+                name_str = entry["name"][:30] if entry["name"] else "(unnamed)"
+                print(f"Clicking {ref}: {name_str} [{entry['role']}] "
+                      f"at ({entry['cx']}, {entry['cy']}) [from cache, {age}s old]")
+                return click_coords(entry["cx"], entry["cy"])
+
+            print(f"Error: Element {ref} not found. Run analyze or snapshot -i first.")
             return False
 
     elem = ELEMENT_CACHE[ref]
@@ -271,7 +286,7 @@ def click_element(ref, force_confidence_threshold=0.5):
             )
 
     print(f"Clicking {ref}: {name_str} [{role_str}] at ({x}, {y})")
-    click(x, y)
+    click_coords(x, y)
     return True
 
 
@@ -296,7 +311,7 @@ def click(target=None, verify=None, verify_timeout=5):
         x, y = int(target[0]), int(target[1])
         click_coords(x, y)
         success = True
-    elif isinstance(target, str) and target.startswith("@e"):
+    elif isinstance(target, str) and (target.startswith("@e") or target.startswith("@t")):
         success = click_element(target)
     elif (
         isinstance(target, str)

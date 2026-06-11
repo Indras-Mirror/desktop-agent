@@ -3,16 +3,26 @@
 # Combines AT-SPI tree + OCR text + spatial layout into one structured
 # ~500-token output so local LLMs can "see" the screen without vision models.
 
-from .config import ATSPI_AVAILABLE, PRIMARY_MONITOR
+from .config import ATSPI_AVAILABLE, PRIMARY_MONITOR, CACHE_DIR
 from .window import get_active_window
 from .input import screenshot as take_screenshot
+from .element_cache import save_refs
 import json
 import time
 import os
 import sys
 import subprocess
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, Counter
+
+LAST_ANALYZE_FILE = CACHE_DIR / "last_analyze.json"
+
+# Element/text caps per detail level: (max_elements, max_texts, run_ocr)
+_DETAIL_LEVELS = {
+    "quick": (15, 0, False),   # AT-SPI only, skip OCR (~1s instead of ~4s)
+    "normal": (40, 30, True),
+    "deep": (80, 60, True),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -208,16 +218,131 @@ def _walk_atspi(target_pid=None):
 # OCR: full-screen text extraction
 # ---------------------------------------------------------------------------
 
-def _ocr_screen(ss_path):
-    """Run hybrid OCR on screenshot — Tesseract ensemble + RapidOCR union.
+def _ocr_screen(ss_path, region_rect=None, max_regions=60):
+    """Run OCR on screenshot (RapidOCR primary, Tesseract fallback).
 
-    Returns deduplicated, merged text regions with confidence scores.
-    Uses upscaling, word merging, and multi-pass ensemble voting.
+    If region_rect (x, y, w, h) is given, only that crop is OCR'd —
+    faster and less background noise. Coordinates in the returned
+    regions are always full-screen (primary-relative).
     """
     from .ocr import ocr_screen as do_ocr
 
-    regions = do_ocr(ss_path, engine="rapidocr", min_confidence=40, max_regions=60)
-    return regions
+    if region_rect:
+        try:
+            from PIL import Image
+
+            rx, ry, rw, rh = region_rect
+            crop_path = Path("/tmp/desktop-agent") / "analyze_region.png"
+            img = Image.open(ss_path)
+            img.crop((rx, ry, rx + rw, ry + rh)).save(crop_path)
+            regions = do_ocr(crop_path, engine="rapidocr",
+                             min_confidence=40, max_regions=max_regions)
+            for r in regions:
+                r["x"] += rx
+                r["y"] += ry
+            return regions
+        except Exception:
+            pass  # fall through to full-screen OCR
+
+    return do_ocr(ss_path, engine="rapidocr", min_confidence=40,
+                  max_regions=max_regions)
+
+
+# ---------------------------------------------------------------------------
+# Region targeting — analyze only part of the screen
+# ---------------------------------------------------------------------------
+
+def _parse_region(region, mon):
+    """Parse --region value into a primary-relative (x, y, w, h) rect.
+
+    Accepts zone names (top/bottom/left/right/center) or "x,y,w,h".
+    Returns None if unparseable.
+    """
+    if not region:
+        return None
+
+    w, h = mon["width"], mon["height"]
+    zones = {
+        "top": (0, 0, w, h // 4),
+        "bottom": (0, h * 3 // 4, w, h // 4),
+        "left": (0, 0, w // 4, h),
+        "right": (w * 3 // 4, 0, w // 4, h),
+        "center": (w // 4, h // 4, w // 2, h // 2),
+    }
+    if region in zones:
+        return zones[region]
+
+    parts = region.split(",")
+    if len(parts) == 4 and all(p.strip().lstrip("-").isdigit() for p in parts):
+        return tuple(int(p) for p in parts)
+
+    return None
+
+
+def _in_rect(e, rect):
+    """True if the element's center falls inside rect (x, y, w, h)."""
+    rx, ry, rw, rh = rect
+    cx = e["x"] + e.get("w", 0) // 2
+    cy = e["y"] + e.get("h", 0) // 2
+    return rx <= cx < rx + rw and ry <= cy < ry + rh
+
+
+# ---------------------------------------------------------------------------
+# Change detection — diff against the previous analyze run
+# ---------------------------------------------------------------------------
+
+def _load_last_analysis():
+    try:
+        return json.loads(LAST_ANALYZE_FILE.read_text())
+    except Exception:
+        return None
+
+
+def _save_last_analysis(result):
+    try:
+        slim = {
+            "screen": result["screen"],
+            "atspi_elements": result["atspi_elements"],
+            "ocr_texts": result["ocr_texts"],
+            "timestamp": time.time(),
+        }
+        LAST_ANALYZE_FILE.write_text(json.dumps(slim))
+    except Exception:
+        pass
+
+
+def _compute_diff(prev, current):
+    """Compare current analysis to the previous one → what changed."""
+    if not prev:
+        return {"changed": None, "note": "no previous analysis to compare against"}
+
+    diff = {}
+    prev_win = prev.get("screen", {}).get("active_window")
+    cur_win = current["screen"]["active_window"]
+    if prev_win != cur_win:
+        diff["active_window"] = {"before": prev_win, "after": cur_win}
+
+    def elem_sig(e):
+        return f"{e['role']}:{e['name']}"
+
+    prev_elems = Counter(elem_sig(e) for e in prev.get("atspi_elements", []))
+    cur_elems = Counter(elem_sig(e) for e in current["atspi_elements"])
+    diff["elements_added"] = sorted((cur_elems - prev_elems).elements())
+    diff["elements_removed"] = sorted((prev_elems - cur_elems).elements())
+
+    prev_texts = Counter(t["text"] for t in prev.get("ocr_texts", []))
+    cur_texts = Counter(t["text"] for t in current["ocr_texts"])
+    diff["texts_added"] = sorted((cur_texts - prev_texts).elements())
+    diff["texts_removed"] = sorted((prev_texts - cur_texts).elements())
+
+    age = time.time() - prev.get("timestamp", 0)
+    diff["compared_to_sec_ago"] = round(age, 1)
+    diff["changed"] = bool(
+        "active_window" in diff
+        or diff["elements_added"] or diff["elements_removed"]
+        or diff["texts_added"] or diff["texts_removed"]
+    )
+    return diff
 
 
 # ---------------------------------------------------------------------------
@@ -282,33 +407,49 @@ def _dedupe_menubars(elements):
 # Main analyze entry point
 # ---------------------------------------------------------------------------
 
-def analyze(output_format="text"):
+def analyze(output_format="text", detail="normal", diff=False, region=None):
     """Produce a unified screen analysis for AI consumption.
+
+    Args:
+        output_format: "text" or "json"
+        detail: "quick" (AT-SPI only, no OCR), "normal", or "deep" (uncapped)
+        diff: also report what changed since the previous analyze run
+        region: restrict analysis to a zone name (top/bottom/left/right/center)
+                or a "x,y,w,h" pixel rect (primary-relative)
 
     Returns a dict (also printed to stdout) with:
         - screen: dimensions + active window
-        - atspi_elements: condensed AT-SPI element list
-        - ocr_text: OCR text regions
+        - atspi_elements: condensed AT-SPI element list (with @e refs)
+        - ocr_texts: OCR text regions (with @t refs)
         - zones: spatial grouping
         - summary: human-readable one-liner
+        - diff: changes vs previous run (when diff=True)
+
+    Refs are persisted to ~/.cache/desktop-agent/elements.json so a
+    follow-up `desktop-agent click @e3` works from a separate process.
     """
     start = time.time()
+    max_elements, max_texts, run_ocr = _DETAIL_LEVELS.get(
+        detail, _DETAIL_LEVELS["normal"])
+    region_rect = _parse_region(region, PRIMARY_MONITOR)
+    previous = _load_last_analysis() if diff else None
 
-    # -- Screenshot -----------------------------------------------------------
+    # -- Screenshot (only needed for OCR — quick mode skips it) ---------------
     mon = PRIMARY_MONITOR
     ss_path = Path("/tmp/desktop-agent") / "analyze.png"
 
-    # Suppress noisy "Screenshot saved" in JSON mode
-    if output_format == "json":
-        old_stdout = sys.stdout
-        sys.stdout = open(os.devnull, "w")
-        try:
+    if run_ocr:
+        # Suppress noisy "Screenshot saved" in JSON mode
+        if output_format == "json":
+            old_stdout = sys.stdout
+            sys.stdout = open(os.devnull, "w")
+            try:
+                take_screenshot(ss_path, primary_only=True)
+            finally:
+                sys.stdout.close()
+                sys.stdout = old_stdout
+        else:
             take_screenshot(ss_path, primary_only=True)
-        finally:
-            sys.stdout.close()
-            sys.stdout = old_stdout
-    else:
-        take_screenshot(ss_path, primary_only=True)
 
     # -- AT-SPI elements ------------------------------------------------------
     active_pid = _get_active_pid()
@@ -328,20 +469,37 @@ def analyze(output_format="text"):
     # Collapse duplicate menu bars (same menu names in multiple terminal windows)
     deduped = _dedupe_menubars(deduped)
 
-    # Cap at 40 elements for token budget
-    if len(deduped) > 40:
-        # Keep interactive first, then closest to center
+    # Restrict to requested region
+    if region_rect:
+        deduped = [e for e in deduped if _in_rect(e, region_rect)]
+
+    # Cap for token budget — keep interactive first, then the rest
+    if len(deduped) > max_elements:
         interactive = [e for e in deduped if e["interactive"]]
         others = [e for e in deduped if not e["interactive"]]
-        deduped = (interactive + others)[:40]
+        deduped = (interactive + others)[:max_elements]
+
+    # Assign stable refs (@e1, @e2 ...) and click points
+    for i, e in enumerate(deduped, 1):
+        e["ref"] = f"@e{i}"
+        e["cx"] = e["x"] + e["w"] // 2
+        e["cy"] = e["y"] + e["h"] // 2
 
     # -- OCR text -------------------------------------------------------------
-    text_regions = _ocr_screen(ss_path)
-    text_regions.sort(key=lambda r: (r["y"], r["x"]))
+    if run_ocr:
+        text_regions = _ocr_screen(ss_path, region_rect=region_rect,
+                                   max_regions=max_texts)
+        text_regions.sort(key=lambda r: (r["y"], r["x"]))
+        if len(text_regions) > max_texts:
+            text_regions = text_regions[:max_texts]
+    else:
+        text_regions = []
 
-    # Cap OCR results
-    if len(text_regions) > 30:
-        text_regions = text_regions[:30]
+    # OCR regions get refs too (@t1 ...) so text is directly clickable
+    for i, r in enumerate(text_regions, 1):
+        r["ref"] = f"@t{i}"
+        r["cx"] = r["x"] + r.get("w", 0) // 2
+        r["cy"] = r["y"] + r.get("h", 0) // 2
 
     # -- Zones ----------------------------------------------------------------
     zones = _group_by_zone(deduped, mon["width"], mon["height"])
@@ -390,6 +548,17 @@ def analyze(output_format="text"):
         },
         "summary": _make_summary(deduped, text_regions, active_name, mon),
     }
+    result["detail"] = detail
+    if region_rect:
+        result["region"] = list(region_rect)
+
+    if diff:
+        result["diff"] = _compute_diff(previous, result)
+
+    # Persist refs + analysis so later commands (click @e3, --diff) can use them
+    save_refs(deduped, texts=text_regions,
+              active_window=active_name, source="analyze")
+    _save_last_analysis(result)
 
     elapsed = time.time() - start
     result["elapsed_sec"] = round(elapsed, 2)
@@ -447,20 +616,42 @@ def _print_human(result):
     print(f"Summary: {result['summary']}")
     print()
 
+    # Diff vs previous run
+    if result.get("diff"):
+        d = result["diff"]
+        print("--- Changes Since Last Analyze ---")
+        if d.get("changed") is None:
+            print(f"  {d.get('note', 'no previous data')}")
+        elif not d["changed"]:
+            print(f"  No changes (compared to {d['compared_to_sec_ago']}s ago)")
+        else:
+            if "active_window" in d:
+                aw = d["active_window"]
+                print(f"  Window: \"{aw['before']}\" → \"{aw['after']}\"")
+            for label, key in (("+ elements", "elements_added"),
+                               ("- elements", "elements_removed"),
+                               ("+ text", "texts_added"),
+                               ("- text", "texts_removed")):
+                if d.get(key):
+                    shown = ", ".join(d[key][:8])
+                    extra = f" (+{len(d[key]) - 8} more)" if len(d[key]) > 8 else ""
+                    print(f"  {label}: {shown}{extra}")
+        print()
+
     # AT-SPI elements
     if result["atspi_elements"]:
         print("--- UI Elements (AT-SPI) ---")
         for e in result["atspi_elements"]:
             marker = " ▸" if e["interactive"] else "  "
             name_str = f" \"{e['name']}\"" if e["name"] else ""
-            print(f"  {marker} [{e['role']}]{name_str} @ ({e['x']}, {e['y']})")
+            print(f"  {marker} {e.get('ref', '')} [{e['role']}]{name_str} @ ({e['x']}, {e['y']})")
 
     # OCR texts
     if result["ocr_texts"]:
         print()
         print("--- Text Regions (OCR) ---")
         for r in result["ocr_texts"]:
-            print(f"  \"{r['text']}\" @ ({r['x']}, {r['y']}) [{r['confidence']}%]")
+            print(f"  {r.get('ref', '')} \"{r['text']}\" @ ({r['x']}, {r['y']}) [{r['confidence']}%]")
 
     # Zones
     if result["zones"]:
@@ -487,7 +678,8 @@ def _print_human(result):
         "n_elements": len(result["atspi_elements"]),
         "n_ocr": len(result["ocr_texts"]),
         "interactive": [
-            {"role": e["role"], "name": e["name"], "pos": (e["x"], e["y"])}
+            {"ref": e.get("ref"), "role": e["role"], "name": e["name"],
+             "pos": (e["x"], e["y"])}
             for e in result["atspi_elements"] if e["interactive"]
         ],
         "all_text": [r["text"] for r in result["ocr_texts"]],

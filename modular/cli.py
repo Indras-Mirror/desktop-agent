@@ -139,6 +139,18 @@ SCREEN ANALYSIS (AI-powered vision replacement):
                                    Combines AT-SPI tree + OCR + layout zones
                                    into a ~500-token structured output
     analyze --json                 Same but raw JSON for programmatic use
+    analyze --quick                AT-SPI only, no OCR (~1s, ~80 tokens)
+    analyze --deep                 Uncapped detail (80 elements, 60 texts)
+    analyze --diff                 Also report what changed since last analyze
+    analyze --region top           Restrict to zone (top/bottom/left/right/center)
+    analyze --region x,y,w,h       Restrict to pixel rect (primary-relative)
+    refs                           List cached @e/@t refs from last analyze
+
+    Elements get refs (@e1...) and OCR text gets refs (@t1...).
+    Refs persist to disk, so `click @e3` works as a separate command:
+        desktop-agent analyze --json   # see the screen
+        desktop-agent click @e3        # act on element 3
+        desktop-agent analyze --diff   # verify what changed
 
 AT-SPI ELEMENT DETECTION:
     Run snapshot -i to scan for interactive UI elements
@@ -197,7 +209,7 @@ OCR TEXT FINDING:
                 print("Error: --verify requires a text argument")
                 sys.exit(1)
 
-        if args[0].startswith("@e"):
+        if args[0].startswith("@e") or args[0].startswith("@t"):
             target = args[0]
             success = click(target, verify=verify, verify_timeout=verify_timeout)
         elif len(args) >= 2 and args[0].isdigit() and args[1].isdigit():
@@ -314,7 +326,38 @@ OCR TEXT FINDING:
 
     elif cmd == "analyze":
         json_format = "--json" in args or "-j" in args
-        analyze_screen(output_format="json" if json_format else "text")
+        detail = "normal"
+        if "--quick" in args:
+            detail = "quick"
+        elif "--deep" in args:
+            detail = "deep"
+        diff = "--diff" in args
+        region = None
+        if "--region" in args:
+            region_idx = args.index("--region")
+            if region_idx + 1 < len(args):
+                region = args[region_idx + 1]
+            else:
+                print("Error: --region requires a zone name or x,y,w,h")
+                sys.exit(1)
+        analyze_screen(output_format="json" if json_format else "text",
+                       detail=detail, diff=diff, region=region)
+
+    elif cmd == "refs":
+        from .element_cache import load_all, STALE_AFTER_SEC
+        import time as _time
+
+        data = load_all()
+        if not data:
+            print("No cached refs. Run: desktop-agent analyze")
+            sys.exit(1)
+        ref_age = int(_time.time() - data.get("timestamp", 0))
+        stale = " ⚠ STALE" if ref_age > STALE_AFTER_SEC else ""
+        print(f"Cached refs from `{data.get('source', '?')}` {ref_age}s ago{stale}")
+        print(f"Window at capture: {data.get('active_window', '?')}\n")
+        for ref, e in data.get("refs", {}).items():
+            ref_name = e["name"][:40] if e["name"] else "(unnamed)"
+            print(f"  {ref}: {ref_name} [{e['role']}] → click at ({e['cx']}, {e['cy']})")
 
     elif cmd == "snapshot":
         interactive = "-i" in args or "--interactive" in args

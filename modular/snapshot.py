@@ -87,6 +87,20 @@ def snapshot(interactive=False):
                 desc = f" - {elem['description'][:20]}" if elem["description"] else ""
                 print(f"  {ref}: {name} [{role}]{desc} at ({elem['x']}, {elem['y']})")
 
+            # Persist refs so click @eN works from a separate process
+            # (elem x/y from walk_tree are already click centers)
+            from .element_cache import save_refs
+
+            save_refs(
+                [
+                    {"ref": f"@e{i}", "name": e["name"], "role": e["role"],
+                     "cx": e["x"], "cy": e["y"]}
+                    for i, e in enumerate(visible_elements, 1)
+                ],
+                active_window=active["name"],
+                source="snapshot",
+            )
+
             if PIL_AVAILABLE and ss_path.exists():
                 try:
                     img = Image.open(ss_path)
