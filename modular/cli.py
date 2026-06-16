@@ -40,6 +40,7 @@ from .atspi import pin_element, list_pinned, relink_pinned_elements
 from .snapshot import snapshot
 from .ocr import find_text_on_screen
 from .analyze import analyze as analyze_screen
+from .vision_fallback import describe_screen, ask_vision, is_available as vision_available
 
 
 def main():
@@ -151,6 +152,27 @@ SCREEN ANALYSIS (AI-powered vision replacement):
         desktop-agent analyze --json   # see the screen
         desktop-agent click @e3        # act on element 3
         desktop-agent analyze --diff   # verify what changed
+
+VISION FALLBACK (OpenRouter + Grok):
+    vision                         Describe the screen using AI vision
+    vision --json                  JSON output with model info
+    vision "Is there a Save button visible?"
+    vision --model openai/gpt-4o   Use a different vision model
+    vision --timeout 60            Longer timeout for detailed analysis
+
+    Falls back to alternative models if primary fails.
+    Uses same credentials as visionproxy MCP (OpenRouter).
+    Helpful when AT-SPI + OCR aren't enough (Firefox, Electron apps).
+
+WORKFLOW DSL:
+    workflow validate <file.json>  Validate a workflow definition
+    workflow run <file.json>       Dry-run a workflow (no desktop actions)
+    workflow run --live <file.json>  Execute with approvals (interactive)
+    workflow run --inputs '{"key":"val"}' <file.json>
+
+    Workflows compose desktop-agent commands into recoverable sequences
+    with branching, retry, loops, parallel execution, and approval gates.
+    See modular/workflow/ for full documentation and examples.
 
 AT-SPI ELEMENT DETECTION:
     Run snapshot -i to scan for interactive UI elements
@@ -343,6 +365,145 @@ OCR TEXT FINDING:
         analyze_screen(output_format="json" if json_format else "text",
                        detail=detail, diff=diff, region=region)
 
+    elif cmd == "vision":
+        json_output = "--json" in args
+        model = None
+        if "--model" in args:
+            idx = args.index("--model")
+            if idx + 1 < len(args):
+                model = args[idx + 1]
+                args = [a for i, a in enumerate(args) if i not in (idx, idx + 1)]
+
+        timeout = 30
+        if "--timeout" in args:
+            idx = args.index("--timeout")
+            if idx + 1 < len(args):
+                timeout = int(args[idx + 1])
+                args = [a for i, a in enumerate(args) if i not in (idx, idx + 1)]
+
+        # Check for image path or question
+        clean_args = [a for a in args if a not in ("--json",)]
+        question = " ".join(clean_args) if clean_args else None
+
+        if not vision_available():
+            print("Error: vision fallback not available (OPENROUTER_API_KEY not set)")
+            sys.exit(1)
+
+        if question:
+            answer = ask_vision(question, timeout=timeout, model=model)
+            print(answer)
+        else:
+            result = describe_screen(timeout=timeout, model=model)
+            if json_output:
+                print(json.dumps(result, indent=2))
+            elif result["success"]:
+                print(f"Model: {result['model']}")
+                print(result["description"])
+            else:
+                print(f"Error: {result['error']}")
+                sys.exit(1)
+
+    elif cmd == "workflow":
+        if not args:
+            print("Usage: workflow <subcommand> [options]")
+            print()
+            print("Subcommands:")
+            print("  validate <file.json>  Validate a workflow definition")
+            print("  run <file.json>      Execute a workflow (dry-run)")
+            print("  run --live <file.json>  Execute a workflow (live)")
+            print()
+            print("Workflows use a JSON DSL with 10 step types:")
+            print("  task, assert, if, loop, parallel, human_approval,")
+            print("  retry, wait_for, succeed, fail")
+            print()
+            print("See modular/workflow/ for full docs and examples.")
+            sys.exit(0)
+
+        subcmd = args[0]
+        sub_args = args[1:]
+
+        if subcmd == "validate":
+            if not sub_args:
+                print("Usage: workflow validate <file.json>")
+                sys.exit(1)
+            path = sub_args[0]
+            with open(path) as f:
+                definition = json.load(f)
+            from .workflow.validate import validate_workflow_definition
+            result = validate_workflow_definition(definition)
+            if result.valid:
+                print("Valid workflow definition")
+            else:
+                print(f"Invalid: {len(result.issues)} issue(s)")
+                for issue in result.issues:
+                    print(f"  [{issue.code}] {issue.path}: {issue.message}")
+                sys.exit(1)
+
+        elif subcmd == "run":
+            live = "--live" in sub_args
+            sub_args = [a for a in sub_args if a != "--live"]
+            inputs = {}
+            if "--inputs" in sub_args:
+                idx = sub_args.index("--inputs")
+                if idx + 1 < len(sub_args):
+                    inputs = json.loads(sub_args[idx + 1])
+                    sub_args = sub_args[:idx] + sub_args[idx + 2:]
+
+            if not sub_args:
+                print("Usage: workflow run [--live] [--inputs '{\"key\":\"val\"}'] <file.json>")
+                sys.exit(1)
+            path = sub_args[0]
+            with open(path) as f:
+                definition = json.load(f)
+
+            from .workflow.evaluator import execute_workflow
+            from .workflow.types import StepResult, WorkflowGuards
+
+            def dry_run_task(step, resolved):
+                print(f"  [dry-run] Task '{step.id}': {resolved[:80]}")
+                return StepResult(status="done", passed=True,
+                                  result=f"dry-run: {resolved[:40]}")
+
+            def live_run_task(step, resolved):
+                print(f"  [live] Task '{step.id}': {resolved[:80]}")
+                # TODO: integrate with agent loop for actual execution
+                return StepResult(status="done", passed=True,
+                                  result=f"live: {resolved[:40]}")
+
+            def on_event(event):
+                if event.type in ("step-start", "step-finish"):
+                    marker = "→" if event.type == "step-start" else "←"
+                    outcome = f" ({event.outcome})" if event.outcome else ""
+                    print(f"  {marker} {event.step_id} [{event.step_type}]{outcome}")
+
+            def on_approval(step, msg):
+                print(f"\n  ⏸  Approval needed: {step.id}")
+                if msg:
+                    print(f"  Message: {msg}")
+                response = input("  Approve? [y/N]: ").strip().lower()
+                return response in ("y", "yes")
+
+            run_fn = live_run_task if live else dry_run_task
+            result = execute_workflow(
+                definition, run_task=run_fn,
+                inputs=inputs,
+                on_event=on_event,
+                on_approval=on_approval if live else None,
+                guards=WorkflowGuards(max_iterations=100, deadline_seconds=300),
+            )
+
+            print(f"\nStatus: {result.status}")
+            if result.output:
+                print(f"Output: {json.dumps(result.output, indent=2)}")
+            if result.error:
+                print(f"Error: [{result.error['code']}] {result.error['message']}")
+            print(f"Iterations: {result.iterations_used}")
+            print(f"Bindings: {len(result.bindings)} step result(s)")
+
+        else:
+            print(f"Unknown workflow subcommand: {subcmd}")
+            sys.exit(1)
+
     elif cmd == "refs":
         from .element_cache import load_all, STALE_AFTER_SEC
         import time as _time
@@ -352,12 +513,18 @@ OCR TEXT FINDING:
             print("No cached refs. Run: desktop-agent analyze")
             sys.exit(1)
         ref_age = int(_time.time() - data.get("timestamp", 0))
-        stale = " ⚠ STALE" if ref_age > STALE_AFTER_SEC else ""
-        print(f"Cached refs from `{data.get('source', '?')}` {ref_age}s ago{stale}")
+        stale = " (stale)" if ref_age > STALE_AFTER_SEC else ""
+        print(
+            "Cached refs from"
+            f" {data.get('source', '?')} {ref_age}s ago{stale}"
+        )
         print(f"Window at capture: {data.get('active_window', '?')}\n")
         for ref, e in data.get("refs", {}).items():
             ref_name = e["name"][:40] if e["name"] else "(unnamed)"
-            print(f"  {ref}: {ref_name} [{e['role']}] → click at ({e['cx']}, {e['cy']})")
+            print(
+                f"  {ref}: {ref_name} [{e['role']}] "
+                f"-> click at ({e['cx']}, {e['cy']})"
+            )
 
     elif cmd == "snapshot":
         interactive = "-i" in args or "--interactive" in args
