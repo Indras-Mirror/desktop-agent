@@ -10,6 +10,7 @@ from .task_system import (
     search_tasks,
     replay_task,
     delete_task,
+    record_step,
 )
 from .input import (
     focus_window,
@@ -214,10 +215,12 @@ OCR TEXT FINDING:
             print("Usage: focus <window-name>")
             sys.exit(1)
         focus_window(args[0])
+        record_step("focus", [args[0]], f"Focus window: {args[0]}")
 
     elif cmd == "click":
         if len(args) == 0:
             success = click()
+            record_step("click", [], "Click at current mouse position")
             sys.exit(0 if success else 1)
 
         verify = None
@@ -234,20 +237,28 @@ OCR TEXT FINDING:
         if args[0].startswith("@e") or args[0].startswith("@t"):
             target = args[0]
             success = click(target, verify=verify, verify_timeout=verify_timeout)
+            record_step("click", [target], f"Clicked {target}")
         elif len(args) >= 2 and args[0].isdigit() and args[1].isdigit():
             target = (int(args[0]), int(args[1]))
             success = click(target, verify=verify, verify_timeout=verify_timeout)
+            record_step("click", [args[0], args[1]], f"Click at ({args[0]}, {args[1]})")
         else:
             target = " ".join(args)
             success = click(target, verify=verify, verify_timeout=verify_timeout)
-
+            record_step("click", [target], f"Clicked text: {target}")
         sys.exit(0 if success else 1)
 
     elif cmd == "dblclick":
         if len(args) == 0:
             dblclick()
+            record_step("dblclick", [], "Double-click at current position")
         elif len(args) >= 2:
             dblclick(int(args[0]), int(args[1]))
+            record_step(
+                "dblclick",
+                [args[0], args[1]],
+                f"Double-click at ({args[0]}, {args[1]})",
+            )
         else:
             print("Usage: dblclick [<x> <y>]")
             sys.exit(1)
@@ -255,8 +266,14 @@ OCR TEXT FINDING:
     elif cmd == "rightclick":
         if len(args) == 0:
             rightclick()
+            record_step("rightclick", [], "Right-click at current position")
         elif len(args) >= 2:
             rightclick(int(args[0]), int(args[1]))
+            record_step(
+                "rightclick",
+                [args[0], args[1]],
+                f"Right-click at ({args[0]}, {args[1]})",
+            )
         else:
             print("Usage: rightclick [<x> <y>]")
             sys.exit(1)
@@ -288,18 +305,23 @@ OCR TEXT FINDING:
             print("Usage: move <x> <y>")
             sys.exit(1)
         move(int(args[0]), int(args[1]))
+        record_step(
+            "move", [args[0], args[1]], f"Move to ({args[0]}, {args[1]})"
+        )
 
     elif cmd == "type":
         if not args:
             print("Usage: type <text>")
             sys.exit(1)
         type_text(" ".join(args))
+        record_step("type", [" ".join(args)], f"Type: {' '.join(args)[:50]}")
 
     elif cmd == "key":
         if not args:
             print("Usage: key <keyname>")
             sys.exit(1)
         press_key(args[0])
+        record_step("key", [args[0]], f"Press key: {args[0]}")
 
     elif cmd == "shortcut":
         from .shortcuts import get_shortcut, list_shortcuts
@@ -458,17 +480,12 @@ OCR TEXT FINDING:
 
             from .workflow.evaluator import execute_workflow
             from .workflow.types import StepResult, WorkflowGuards
+            from .workflow.task_runner import run_desktop_task
 
             def dry_run_task(step, resolved):
                 print(f"  [dry-run] Task '{step.id}': {resolved[:80]}")
                 return StepResult(status="done", passed=True,
                                   result=f"dry-run: {resolved[:40]}")
-
-            def live_run_task(step, resolved):
-                print(f"  [live] Task '{step.id}': {resolved[:80]}")
-                # TODO: integrate with agent loop for actual execution
-                return StepResult(status="done", passed=True,
-                                  result=f"live: {resolved[:40]}")
 
             def on_event(event):
                 if event.type in ("step-start", "step-finish"):
@@ -483,7 +500,7 @@ OCR TEXT FINDING:
                 response = input("  Approve? [y/N]: ").strip().lower()
                 return response in ("y", "yes")
 
-            run_fn = live_run_task if live else dry_run_task
+            run_fn = run_desktop_task if live else dry_run_task
             result = execute_workflow(
                 definition, run_task=run_fn,
                 inputs=inputs,
@@ -631,6 +648,7 @@ OCR TEXT FINDING:
 
         app_name = " ".join(args)
         success, window_id, status = ensure_app(app_name, timeout=timeout)
+        record_step("ensure-app", [app_name], f"Ensure app: {app_name}")
         sys.exit(0 if success else 1)
 
     elif cmd == "navigate":
@@ -654,6 +672,7 @@ OCR TEXT FINDING:
 
         url = " ".join(args)
         success = navigate(url, wait_for=wait_for, timeout=timeout)
+        record_step("navigate", [url], f"Navigate to: {url}")
         sys.exit(0 if success else 1)
 
     elif cmd == "web-search":
@@ -675,6 +694,7 @@ OCR TEXT FINDING:
 
         query = " ".join(args)
         success = web_search(query, verify=verify, timeout=timeout)
+        record_step("web-search", [query], f"Search: {query}")
         sys.exit(0 if success else 1)
 
     elif cmd == "pin":
@@ -813,12 +833,22 @@ OCR TEXT FINDING:
         direction = args[2] if len(args) > 2 else "down"
         clicks = int(args[3]) if len(args) > 3 else 3
         scroll(x, y, direction=direction, clicks=clicks)
+        record_step(
+            "scroll",
+            [str(x), str(y), direction, str(clicks)],
+            f"Scroll at ({x}, {y}) {direction} {clicks}",
+        )
 
     elif cmd == "drag":
         if len(args) < 4:
             print("Usage: drag <x1> <y1> <x2> <y2>")
             sys.exit(1)
         drag(int(args[0]), int(args[1]), int(args[2]), int(args[3]))
+        record_step(
+            "drag",
+            [args[0], args[1], args[2], args[3]],
+            f"Drag ({args[0]},{args[1]})->({args[2]},{args[3]})",
+        )
 
     else:
         print(f"Unknown command: {cmd}")

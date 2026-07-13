@@ -8,6 +8,7 @@ from .window import get_active_window
 from .input import screenshot as take_screenshot
 from .element_cache import save_refs
 import json
+import re
 import time
 import os
 import sys
@@ -16,6 +17,33 @@ from pathlib import Path
 from collections import defaultdict, Counter
 
 LAST_ANALYZE_FILE = CACHE_DIR / "last_analyze.json"
+
+
+def clean_label(text: str) -> str:
+    """Strip braille, PUA, zero-width, and other icon-font glyphs from labels.
+
+    AT-SPI/OCR element names (and window titles) frequently carry icon-font
+    glyphs (Claude Code's braille title), Private-Use-Area codepoints, and
+    zero-width characters. These pollute fuzzy matching and pinned-element
+    relink selectors, so strip them and collapse whitespace.
+    """
+    if not text:
+        return text
+    # Strip zero-width / BOM characters
+    text = (
+        text.replace("​", "")
+        .replace("‌", "")
+        .replace("‍", "")
+        .replace("﻿", "")
+    )
+    # Strip braille pattern block (U+2800–U+28FF)
+    text = re.sub(r"[\u2800-\u28FF]", "", text)
+    # Strip Private Use Areas (U+E000–U+F8FF, U+F0000–U+FFFFD, U+100000–U+10FFFD)
+    text = re.sub(r"[\uE000-\uF8FF\U000f0000-\U000ffffd\U00100000-\U0010fffd]", "", text)
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
 
 # Element/text caps per detail level: (max_elements, max_texts, run_ocr)
 _DETAIL_LEVELS = {
@@ -91,8 +119,8 @@ def _collect_elements(element, depth=0, max_depth=15):
         if not is_app and (w <= 2 or h <= 2):
             return  # too tiny to matter
 
-        name = element.name or ""
-        desc = element.description or ""
+        name = clean_label(element.name or "")
+        desc = clean_label(element.description or "")
 
         # Filter: anonymous containers (no name, structural-only role)
         is_container = role_name in _CONTAINER_ROLES
@@ -507,7 +535,7 @@ def analyze(output_format="text", detail="normal", diff=False, region=None):
     # -- Active window + PID for AT-SPI filtering ---------------------------
     try:
         active_win = get_active_window()
-        active_name = active_win.get("name", "unknown")
+        active_name = clean_label(active_win.get("name", "unknown"))
     except Exception:
         active_name = "unknown"
 

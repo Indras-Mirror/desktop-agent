@@ -1,4 +1,5 @@
 from .config import ATSPI_AVAILABLE, ELEMENT_CACHE, STABLE_ELEMENT_REGISTRY
+from .analyze import clean_label
 from difflib import SequenceMatcher
 import math
 
@@ -31,8 +32,8 @@ def create_element_selector(element):
 
         selector = {
             "role": element.getRoleName(),
-            "name": element.name if element.name else None,
-            "description": element.description if element.description else None,
+            "name": clean_label(element.name) if element.name else None,
+            "description": clean_label(element.description) if element.description else None,
             "app_name": None,
             "index": None,
             "attrs": {},
@@ -84,7 +85,8 @@ def calculate_name_confidence(elem_name, selector_name):
     if not selector_name:
         return 1.0
 
-    elem_name = elem_name or ""
+    elem_name = clean_label(elem_name or "")
+    selector_name = clean_label(selector_name or "")
     selector_name_lower = selector_name.lower()
     elem_name_lower = elem_name.lower()
 
@@ -187,9 +189,11 @@ def _search_tree_for_all_matches(element, selector, depth, max_depth, min_confid
                     matches.append(
                         {
                             "element": element,
-                            "name": element.name
-                            if element.name
-                            else element.getRoleName(),
+                            "name": clean_label(
+                                element.name
+                                if element.name
+                                else element.getRoleName()
+                            ),
                             "role": element.getRoleName(),
                             "description": element.description
                             if element.description
@@ -235,7 +239,9 @@ def _search_tree_for_match(element, selector, depth, max_depth):
             if bounds:
                 return {
                     "element": element,
-                    "name": element.name if element.name else element.getRoleName(),
+                    "name": clean_label(
+                        element.name if element.name else element.getRoleName()
+                    ),
                     "role": element.getRoleName(),
                     "x": bounds["x"],
                     "y": bounds["y"],
@@ -432,7 +438,9 @@ def walk_tree(element, depth=0, max_depth=10, elements=None):
             bounds = get_element_bounds(element)
 
             if bounds and bounds["width"] > 5 and bounds["height"] > 5:
-                name = element.name if element.name else element.getRoleName()
+                name = clean_label(
+                    element.name if element.name else element.getRoleName()
+                )
                 description = element.description if element.description else ""
 
                 elements.append(
